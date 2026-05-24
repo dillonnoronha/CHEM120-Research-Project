@@ -1,6 +1,6 @@
 # CHEM 120 Catalyst Insight Studio
 
-A Streamlit app
+A student-friendly Streamlit app for the CHEM 120 research project.
 
 ## What the app does
 
@@ -15,6 +15,21 @@ The app helps students and instructors:
 7. Explain the correlation heatmap in plain language.
 8. Train a simple machine-learning model for hypothesis generation.
 9. Add a new compound during the session and export the updated dataset.
+
+
+## Latest fix: readable phase counts
+
+The app now normalizes older phase wording before graphing. For example:
+
+```text
+pure phase/homogenous mixture -> Pure
+homogenous mixture -> Pure
+heterogeneous mixture -> Impure
+did not make compound / melted to crucible -> Not made
+blank -> Missing
+```
+
+This prevents the Phase Counts graph from becoming crowded with long overlapping labels when older class spreadsheets are uploaded.
 
 ## Run the app
 
@@ -87,3 +102,16 @@ Downloads cleaned data, validation report, outlier report, and Excel/CSV outputs
 
 The app does not overwrite your original Excel file. This protects the master database.
 Use the Export tab to save cleaned or updated data.
+
+
+## Phase Counts graph fix
+
+The Explore Results page intentionally groups long/raw phase answers into short categories before plotting:
+
+- Pure
+- Impure
+- Not made
+- Other / needs review
+- Missing
+
+This is handled in `normalize_phase_label()` and enforced again in `plot_distribution()` with a horizontal bar chart. Do not switch Phase Counts back to a vertical x-axis chart unless the labels are guaranteed to stay short.

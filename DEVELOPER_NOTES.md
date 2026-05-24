@@ -115,3 +115,28 @@ The app uses Streamlit caching:
 
 Caching is used for file loading, reshaping, cleaning, descriptor calculations, validation, outlier detection, and export conversion.
 This reduces reload time when students switch tabs or adjust filters.
+
+
+## Phase graph fix
+
+The phase graph is controlled by these functions in `app.py`:
+
+```python
+normalize_phase_label()
+display_label()
+plot_distribution()
+```
+
+`normalize_phase_label()` converts long raw survey answers into short categories before the graph is built. Update that function if future surveys add new phase wording.
+
+Current phase categories:
+
+```text
+Pure
+Impure
+Not made
+Other / needs review
+Missing
+```
+
+This keeps the Phase Counts graph readable even when the uploaded spreadsheet contains long Microsoft Forms answers.
