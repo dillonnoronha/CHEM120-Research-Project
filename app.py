@@ -1,5 +1,9 @@
 
 """
+CHEM 120 Catalyst Insight Studio
+================================
+
+Student-friendly Streamlit dashboard for the CHEM 120 research project.
 
 Purpose
 -------
@@ -17,7 +21,7 @@ It is designed for future students, so the code is organized into clear blocks:
 9. Machine-learning helpers
 10. Streamlit user interface
 
-update this app later
+How to update this app later
 ----------------------------
 - Add a new descriptor in `add_chemical_descriptors()`.
 - Add a new validation rule in `validate_compound_rows()`.
@@ -75,7 +79,11 @@ COMPOUND_SLOTS = [1, 2, 3, 4]
 # CHEM 120 project label conversions.
 # Keeping these dictionaries near the top makes the app easy to adapt if the
 # class changes its coding scheme later.
-PHASE_MAP = {"impure": 1, "pure": 2}
+# Phase is normalized before encoding so older survey wording such as
+# "pure phase/homogenous mixture" does not create messy graph labels.
+# CHEM 120 officially uses impure -> 1 and pure -> 2; not made -> 0 is
+# included to handle older/raw survey exports safely.
+PHASE_MAP = {"not made": 0, "impure": 1, "pure": 2}
 BUBBLE_MAP = {"maybe": 0, "yes": 1, "no": 2}
 
 # Optional element/ratio fields used for mixed A-site and B-site compounds.
@@ -268,6 +276,114 @@ def clean_label(value: object) -> str:
     """Clean labels like phase and bubble response into lowercase text."""
 
     return clean_text(value).lower()
+
+
+def normalize_phase_label(value: object) -> str:
+    """
+    Convert raw phase wording into a small set of clean categories.
+
+    Why this exists:
+    Older CHEM 120 spreadsheets sometimes use long phase descriptions such as
+    "pure phase/homogenous mixture" or "did not make compound X/it melted to the
+    crucible". If those raw strings are plotted directly, the Phase Counts graph
+    becomes unreadable. This helper maps those long answers to clear labels.
+
+    Returned labels:
+        "pure"                -> clean/pure phase result
+        "impure"              -> heterogeneous or mixed result
+        "not made"            -> compound failed, melted, or was not produced
+        "other/needs review"  -> value exists but does not match known wording
+        ""                    -> missing/blank
+    """
+
+    label = clean_label(value)
+    if not label:
+        return ""
+
+    # Remove punctuation/spaces so spelling variations are easier to match.
+    key = normalize_key(label)
+
+    # Handle failed/no-compound entries before checking for "pure" so phrases
+    # like "did not make pure compound" do not accidentally map to pure.
+    not_made_tokens = [
+        "didnotmake",
+        "notmade",
+        "nocompound",
+        "melted",
+        "failed",
+        "crucible",
+    ]
+    if any(token in key for token in not_made_tokens):
+        return "not made"
+
+    # Impure/heterogeneous wording from older Microsoft Forms exports.
+    impure_tokens = [
+        "impure",
+        "heterogeneous",
+        "heterogenous",
+        "mixedphase",
+        "mixtureofphases",
+    ]
+    if any(token in key for token in impure_tokens):
+        return "impure"
+
+    # Pure/homogeneous wording. The older data often spells homogeneous as
+    # "homogenous", so both spellings are accepted.
+    pure_tokens = [
+        "pure",
+        "purephase",
+        "homogeneousmixture",
+        "homogenousmixture",
+        "homogeneous",
+        "homogenous",
+    ]
+    if any(token in key for token in pure_tokens):
+        return "pure"
+
+    return "other/needs review"
+
+
+def normalize_bubble_label(value: object) -> str:
+    """
+    Convert raw bubble responses into yes/no/maybe.
+
+    The current survey uses exactly yes, no, or maybe. This function makes the
+    app a little more tolerant of capitalization and older wording.
+    """
+
+    label = clean_label(value)
+    if not label:
+        return ""
+
+    key = normalize_key(label)
+
+    if key in {"yes", "y", "true", "1", "bubble", "bubbles"}:
+        return "yes"
+    if key in {"no", "n", "false", "2", "nobubble", "nobubbles"}:
+        return "no"
+    if key in {"maybe", "possibly", "possible", "unclear", "0"}:
+        return "maybe"
+
+    return "other/needs review"
+
+
+def display_label(value: object) -> str:
+    """Convert internal labels into clean labels for graphs and tables."""
+
+    label = clean_label(value)
+    if not label:
+        return "Missing"
+
+    replacements = {
+        "pure": "Pure",
+        "impure": "Impure",
+        "not made": "Not made",
+        "other/needs review": "Other / needs review",
+        "yes": "Yes",
+        "no": "No",
+        "maybe": "Maybe",
+    }
+    return replacements.get(label, clean_text(value).title())
 
 
 def safe_float(value: object) -> float:
@@ -848,10 +964,23 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
         df[col] = df[col].apply(safe_float)
 
     # Clean text labels.
-    for col in ["P", "Bub"]:
-        if col not in df.columns:
-            df[col] = ""
-        df[col] = df[col].apply(clean_label)
+    #
+    # Phase receives special normalization because older/raw class spreadsheets
+    # may contain long answers such as "pure phase/homogenous mixture" or
+    # "did not make compound X/it melted to the crucible". Without this step the
+    # phase count graph becomes crowded and unreadable.
+    if "P" not in df.columns:
+        df["P"] = ""
+    if "Bub" not in df.columns:
+        df["Bub"] = ""
+
+    # Keep the original raw wording for troubleshooting and validation reports.
+    df["P_raw"] = df["P"].apply(clean_text)
+    df["Bub_raw"] = df["Bub"].apply(clean_text)
+
+    # Store normalized labels in P/Bub so downstream charts and ML use clean data.
+    df["P"] = df["P"].apply(normalize_phase_label)
+    df["Bub"] = df["Bub"].apply(normalize_bubble_label)
 
     # If O is blank but ON is filled, assume O because the survey expects oxygen.
     if "O" in df.columns:
@@ -865,9 +994,10 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
     # Reconstruct formula after cleaning.
     df["Formula"] = df.apply(reconstruct_formula, axis=1)
 
-    # Create clean student-friendly labels for display.
-    df["PhaseLabel"] = df["P"].replace({"": "missing"})
-    df["BubbleLabel"] = df["Bub"].replace({"": "missing"})
+    # Create clean student-friendly labels for display and plots.
+    # These labels are short on purpose so graph tick labels do not overlap.
+    df["PhaseLabel"] = df["P"].apply(display_label)
+    df["BubbleLabel"] = df["Bub"].apply(display_label)
 
     return df
 
@@ -940,11 +1070,24 @@ def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.D
             if not symbol and not np.isnan(ratio) and ratio > 0:
                 add_issue(row, symbol_field, f"{ratio_field} has a number but {symbol_field} is blank.", "Enter the optional element symbol or clear the ratio.")
 
-        # Allowed labels.
-        if clean_label(row.get("P")) not in PHASE_MAP:
-            add_issue(row, "P", "Invalid phase label.", "Use exactly: pure or impure.")
-        if clean_label(row.get("Bub")) not in BUBBLE_MAP:
-            add_issue(row, "Bub", "Invalid bubble response.", "Use exactly: yes, no, or maybe.")
+        # Allowed labels after normalization.
+        #
+        # "other/needs review" means the app could not confidently interpret the
+        # raw entry. Students/instructors should review those rows manually.
+        phase_label = clean_label(row.get("P"))
+        bubble_label = clean_label(row.get("Bub"))
+
+        if phase_label == "other/needs review" or phase_label not in PHASE_MAP:
+            raw_phase = clean_text(row.get("P_raw", row.get("P", "")))
+            add_issue(
+                row,
+                "P",
+                f"Unrecognized phase label: '{raw_phase}'.",
+                "Use pure, impure, or a recognized not-made/failed-compound wording.",
+            )
+        if bubble_label == "other/needs review" or bubble_label not in BUBBLE_MAP:
+            raw_bubble = clean_text(row.get("Bub_raw", row.get("Bub", "")))
+            add_issue(row, "Bub", f"Unrecognized bubble response: '{raw_bubble}'.", "Use exactly: yes, no, or maybe.")
 
     return pd.DataFrame(issues)
 
@@ -1175,16 +1318,81 @@ def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabe
     return fig
 
 
-def plot_distribution(df: pd.DataFrame, column: str, title: str):
-    """Return a simple count chart for labels such as phase or bubble response."""
+def plot_distribution(
+    df: pd.DataFrame,
+    column: str,
+    title: str,
+    preferred_order: Optional[Sequence[str]] = None,
+):
+    """
+    Return a readable count chart for labels such as phase or bubble response.
 
-    counts = df[column].fillna("missing").astype(str).value_counts().sort_index()
-    fig, ax = plt.subplots(figsize=(7, 3.8))
-    ax.bar(counts.index, counts.values)
+    IMPORTANT FIX:
+    The first version of the app used vertical bars for Phase counts. Raw
+    Microsoft Forms phase labels can be very long, so the x-axis became unreadable.
+    This function now uses a HORIZONTAL bar chart. Horizontal labels have enough
+    space, and phase labels are also normalized again inside this plotting helper
+    as a safety net.
+
+    Future developers:
+    - Keep this as a horizontal chart for text-heavy categories.
+    - If the survey adds new wording, update `normalize_phase_label()` above.
+    """
+
+    if column not in df.columns or df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3.8))
+        ax.set_title(title, fontsize=13, fontweight="bold")
+        ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        return fig
+
+    series = df[column].copy()
+
+    # Safety net: if this is the Phase chart, collapse raw phrases like
+    # "pure phase/homogenous mixture" before counting. This prevents the graph
+    # from ever plotting long raw phase phrases.
+    is_phase_chart = "phase" in title.lower() or column.lower() in {"p", "phase", "phaselabel", "p_raw"}
+    is_bubble_chart = "bubble" in title.lower() or column.lower() in {"bub", "bubble", "bubblelabel", "bub_raw"}
+
+    if is_phase_chart:
+        series = series.apply(lambda value: display_label(normalize_phase_label(value)))
+    elif is_bubble_chart:
+        series = series.apply(lambda value: display_label(normalize_bubble_label(value)))
+    else:
+        series = series.apply(display_label)
+
+    counts = series.replace("", "Missing").fillna("Missing").astype(str).value_counts()
+
+    # Put common categories in a stable, student-friendly order. Any unexpected
+    # categories still appear at the end so data problems remain visible.
+    if preferred_order:
+        ordered_labels = [label for label in preferred_order if label in counts.index]
+        extra_labels = sorted([label for label in counts.index if label not in ordered_labels])
+        labels = ordered_labels + extra_labels
+        counts = counts.reindex(labels)
+    else:
+        counts = counts.sort_index()
+
+    # Horizontal bars fix label overlap because category names are on the y-axis.
+    fig_height = max(3.4, min(7.0, 0.55 * len(counts) + 1.4))
+    fig, ax = plt.subplots(figsize=(8.5, fig_height))
+
+    y_positions = np.arange(len(counts))
+    ax.barh(y_positions, counts.values)
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(counts.index)
+    ax.invert_yaxis()
+
     ax.set_title(title, fontsize=13, fontweight="bold")
-    ax.set_ylabel("Number of compounds")
-    ax.set_xlabel("")
-    ax.grid(axis="y", alpha=0.25)
+    ax.set_xlabel("Number of compounds")
+    ax.set_ylabel("")
+    ax.grid(axis="x", alpha=0.25)
+
+    # Add numeric labels to the end of each bar for easier reading.
+    max_count = max(counts.values) if len(counts) else 0
+    for y, value in zip(y_positions, counts.values):
+        ax.text(value + max(max_count * 0.01, 0.5), y, str(int(value)), va="center", fontsize=9)
+
     fig.tight_layout()
     return fig
 
@@ -1762,13 +1970,53 @@ def main() -> None:
         if filtered.empty:
             st.warning("No rows match the selected filters.")
         else:
+            # Build plot-safe labels directly from the raw uploaded wording.
+            # This extra step guarantees that raw Microsoft Forms answers never
+            # reach the Phase Counts chart as long, overlapping x-axis labels.
+            plot_df = filtered.copy()
+            if "P_raw" in plot_df.columns:
+                plot_df["PhasePlotLabel"] = plot_df["P_raw"].apply(
+                    lambda value: display_label(normalize_phase_label(value))
+                )
+            else:
+                plot_df["PhasePlotLabel"] = plot_df["P"].apply(
+                    lambda value: display_label(normalize_phase_label(value))
+                )
+
+            if "Bub_raw" in plot_df.columns:
+                plot_df["BubblePlotLabel"] = plot_df["Bub_raw"].apply(
+                    lambda value: display_label(normalize_bubble_label(value))
+                )
+            else:
+                plot_df["BubblePlotLabel"] = plot_df["Bub"].apply(
+                    lambda value: display_label(normalize_bubble_label(value))
+                )
+
             dist_cols = st.columns(2)
             with dist_cols[0]:
-                st.pyplot(plot_distribution(filtered, "BubbleLabel", "Bubble response counts"), use_container_width=True)
+                st.pyplot(
+                    plot_distribution(
+                        plot_df,
+                        "BubblePlotLabel",
+                        "Bubble response counts",
+                        preferred_order=["Yes", "No", "Maybe", "Other / needs review", "Missing"],
+                    ),
+                    use_container_width=True,
+                )
                 st.caption("This shows how many compounds were recorded as yes, no, maybe, or missing.")
             with dist_cols[1]:
-                st.pyplot(plot_distribution(filtered, "PhaseLabel", "Phase counts"), use_container_width=True)
-                st.caption("This shows how many compounds were recorded as pure or impure.")
+                st.pyplot(
+                    plot_distribution(
+                        plot_df,
+                        "PhasePlotLabel",
+                        "Phase counts",
+                        preferred_order=["Pure", "Impure", "Not made", "Other / needs review", "Missing"],
+                    ),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "Long phase answers are grouped into readable categories before graphing: Pure, Impure, Not made, or Needs review."
+                )
 
             st.markdown("### Which elements appear more often with bubbling?")
             st.caption("Bubble yes rate = percentage of compounds in that group where Bubble Response was `yes`.")
