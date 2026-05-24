@@ -1,6 +1,6 @@
 # CHEM 120 Catalyst Insight Studio
 
-A student-friendly Streamlit app for the CHEM 120 research project.
+A Streamlit app
 
 ## What the app does
 
