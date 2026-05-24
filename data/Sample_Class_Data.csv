@@ -1,0 +1,5 @@
+Group Number,Instructor,Semester,1A,1AN,1AP,1APN,1B,1BN,1BP,1BPN,1BDP,1BDPN,1O,1ON,1P,1Bub
+Demo 1,Demo,Spring 2026,La,2,,,Ni,1,,,,,O,4,pure,yes
+Demo 2,Demo,Spring 2026,Sr,1,,,Fe,1,,,,,O,3,impure,no
+Demo 3,Demo,Spring 2026,La,1,Sr,1,Fe,1,,,,,O,4,pure,maybe
+Demo 4,Demo,Spring 2026,La,1,,,Fe,1,Co,1,Ni,1,O,6,pure,yes

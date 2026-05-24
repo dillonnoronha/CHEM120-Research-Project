@@ -1,0 +1,30 @@
+CHEM 120 Catalyst Insight Studio - Quick Start for Windows
+===========================================================
+
+1. Unzip this folder somewhere easy, such as:
+   C:\Users\YOURNAME\Desktop\CHEM120_Student_Friendly_Insight_Studio
+
+2. Open the folder.
+
+3. Double-click:
+   run_app_windows.bat
+
+   OR run these commands in PowerShell inside this folder:
+
+   py -m pip install -r requirements.txt
+   py -m streamlit run app.py
+
+4. Your browser should open automatically.
+
+5. In the left sidebar, upload:
+   Combined_Data.xlsx
+
+6. Use the tabs in order:
+   Start Here -> Check Data -> Explore Results -> Relationship Map -> ML Lab -> Add Compound -> Export
+
+Notes
+-----
+- The app does not overwrite your original Excel file.
+- To save new or cleaned data, use the Export tab.
+- If PowerShell says "streamlit is not recognized", run:
+  py -m streamlit run app.py
