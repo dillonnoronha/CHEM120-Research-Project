@@ -1,9 +1,5 @@
 
 """
-CHEM 120 Catalyst Insight Studio
-================================
-
-Student-friendly Streamlit dashboard for the CHEM 120 research project.
 
 Purpose
 -------
@@ -21,7 +17,7 @@ It is designed for future students, so the code is organized into clear blocks:
 9. Machine-learning helpers
 10. Streamlit user interface
 
-How to update this app later
+update this app later
 ----------------------------
 - Add a new descriptor in `add_chemical_descriptors()`.
 - Add a new validation rule in `validate_compound_rows()`.
