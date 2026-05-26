@@ -794,7 +794,7 @@ def infer_slot_column(columns: Iterable[str], slot: int, field: str) -> Optional
 
 
 @st.cache_data(show_spinner=False)
-def normalize_to_long_format(raw_df: pd.DataFrame) -> pd.DataFrame:
+def normalize_to_long_format(raw_df: pd.DataFrame) -> tuple:
     """
     Convert the uploaded wide spreadsheet into one row per compound.
 
@@ -803,14 +803,16 @@ def normalize_to_long_format(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     Example output:
         Group | Slot | A | AN | B | BN
-        Group | 1    | ... 
+        Group | 1    | ...
         Group | 2    | ...
 
-    This shape is much easier for charts, validation, and machine learning.
+    Returns (DataFrame, list[str]) where the list contains warnings about
+    required columns that could not be matched. An empty list means all
+    required columns were found.
     """
 
     if raw_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), []
 
     columns = list(raw_df.columns)
 
@@ -838,6 +840,29 @@ def normalize_to_long_format(raw_df: pd.DataFrame) -> pd.DataFrame:
         slot: {field: infer_slot_column(columns, slot, field) for field in field_names}
         for slot in COMPOUND_SLOTS
     }
+
+    # Check that the required fields for slot 1 were all matched. If any are
+    # missing it almost always means the Google Form column names changed and
+    # infer_slot_column() needs new aliases added.
+    required_fields = {
+        "A":   "A-site element",
+        "AN":  "A-site ratio",
+        "B":   "B-site element",
+        "BN":  "B-site ratio",
+        "O":   "oxygen element",
+        "ON":  "oxygen ratio",
+        "P":   "phase",
+        "Bub": "bubble response",
+    }
+    column_warnings: list = []
+    first_slot = COMPOUND_SLOTS[0]
+    for field, label in required_fields.items():
+        if slot_map[first_slot].get(field) is None:
+            column_warnings.append(
+                f"Could not find a column for **{label}** (field `{first_slot}{field}`). "
+                f"The uploaded file has these columns: {', '.join(f'`{c}`' for c in columns[:20])}"
+                + (" …and more" if len(columns) > 20 else ".")
+            )
 
     rows: List[dict] = []
 
@@ -871,7 +896,7 @@ def normalize_to_long_format(raw_df: pd.DataFrame) -> pd.DataFrame:
 
             rows.append(record)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), column_warnings
 
 
 # =============================================================================
@@ -1780,7 +1805,16 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Run the main data pipeline. Each step is cached for speed.
     # -------------------------------------------------------------------------
-    long_df = normalize_to_long_format(raw_df)
+    long_df, column_warnings = normalize_to_long_format(raw_df)
+    if column_warnings:
+        with st.expander("⚠️ Column mapping problems — expand to see details", expanded=True):
+            st.warning(
+                "The app could not match one or more required columns in your file. "
+                "This usually means the Google Form question wording changed. "
+                "See **DEVELOPER_NOTES.md → When the Google Form changes** for fix instructions."
+            )
+            for w in column_warnings:
+                st.markdown(f"- {w}")
     clean_df = clean_and_encode_data(long_df, atomic)
     described_df = add_chemical_descriptors(clean_df, atomic, en_table)
 
