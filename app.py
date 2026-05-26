@@ -666,13 +666,32 @@ def main() -> None:
         if not ml_result.get("ok"):
             st.warning(ml_result.get("message", "ML model could not be trained."))
         else:
-            ml_cols = st.columns(3)
+            if ml_result.get("overfit_warning"):
+                st.warning(ml_result["overfit_warning"])
+
+            ml_cols = st.columns(4)
             with ml_cols[0]:
-                st.metric("Estimated test accuracy", f"{ml_result['accuracy']:.0%}")
+                st.metric("Random Forest accuracy", f"{ml_result['rf_accuracy']:.0%}")
             with ml_cols[1]:
-                st.metric("Training rows", ml_result["training_rows"])
+                st.metric("Logistic Regression accuracy", f"{ml_result['lr_accuracy']:.0%}")
             with ml_cols[2]:
+                st.metric("Training rows", ml_result["training_rows"])
+            with ml_cols[3]:
                 st.metric("Testing rows", ml_result["testing_rows"])
+
+            with st.expander("Why two models?"):
+                st.markdown(
+                    """
+                    **Random Forest** is more powerful but can memorize small datasets
+                    (overfitting), which makes its accuracy look better than it really is.
+
+                    **Logistic Regression** is simpler and gives a more honest baseline.
+                    If both models agree, the result is more trustworthy. If Random Forest
+                    is much higher, treat its predictions with extra caution.
+
+                    Predictions below use the Random Forest model.
+                    """
+                )
 
             st.markdown("#### What features did the model use most?")
             importance = ml_result["importance"]
