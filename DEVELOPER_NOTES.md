@@ -79,6 +79,38 @@ Example ideas:
 - flag formulas with too many optional elements
 - flag missing instructor/semester fields
 
+### When the Google Form changes
+
+If the department changes the Google Form wording, column names in the exported spreadsheet will change and the app will show a yellow warning banner listing exactly which fields it could not find.
+
+**Step 1 — Get the new column names.**
+Download a fresh export from the form (or look at the header row of the uploaded file listed in the warning).
+
+**Step 2 — Open `infer_slot_column()` in `app.py`.**
+Find the `field_aliases` dictionary near the top of the function. Each key is an internal field name; its value is a list of accepted lowercase column-name fragments.
+
+```python
+field_aliases = {
+    "A":   ["a", "asite", "asiteelement", "aelement"],
+    "AN":  ["an", "aratio", "asiteratio", "aamount"],
+    "B":   ["b", "bsite", "bsiteelement", "belement"],
+    "BN":  ["bn", "bratio", "bsiteratio", "bamount"],
+    "O":   ["o", "oxygen", "oxygenelement"],
+    "ON":  ["on", "oratio", "oxygenratio", "oxygenamount"],
+    "P":   ["p", "phase"],
+    "Bub": ["bub", "bubble", "bubbleresponse", "h2bubble", "bubbles"],
+    # ... and so on
+}
+```
+
+**Step 3 — Add the new column name fragment as a new alias.**
+For example, if the form now exports a column called `1_AElement` for the A-site, add `"aelement"` (already there) or the new lowercase fragment to the `"A"` list.
+
+**Step 4 — Test.**
+Reload the app with the new export. The warning banner should disappear and compound rows should appear as normal.
+
+**Required fields.** The app flags these eight as required for slot 1: `A`, `AN`, `B`, `BN`, `O`, `ON`, `P`, `Bub`. Optional fields (`AP`, `APN`, `BP`, `BPN`, `BDP`, `BDPN`) silently default to blank if not found.
+
 ### Support a new survey column name
 
 Edit:
