@@ -39,8 +39,10 @@ import streamlit as st
 
 try:
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score
     from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
 
     SKLEARN_AVAILABLE = True
 except Exception:
@@ -1378,10 +1380,15 @@ def build_feature_matrix(
 @st.cache_data(show_spinner=False)
 def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int = 42) -> dict:
     """
-    Train a Random Forest model to predict Bubble = yes.
+    Train a Random Forest and a Logistic Regression model to predict Bubble = yes.
 
-    Returns a dictionary with the model, feature columns, accuracy, and feature
-    importance table. If the data is not sufficient, returns an error message.
+    Both models share the same train/test split so accuracy numbers are directly
+    comparable. The RF model is used for predictions; LR serves as a sanity check.
+
+    Overfitting warning is raised when RF accuracy is suspiciously high relative
+    to LR, or when RF accuracy exceeds 85% on fewer than 100 labeled rows.
+
+    Returns a dict with both models' results, or {"ok": False, "message": ...}.
     """
 
     if not SKLEARN_AVAILABLE:
@@ -1405,7 +1412,6 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
     X = build_feature_matrix(model_df, use_phase=use_phase)
     y = model_df["BubbleYes"].astype(int)
 
-    # Use a stratified split when possible to preserve yes/no balance.
     stratify = y if y.value_counts().min() >= 2 else None
     test_size = 0.25 if len(model_df) >= 20 else 0.35
 
@@ -1413,7 +1419,8 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         X, y, test_size=test_size, random_state=random_state, stratify=stratify
     )
 
-    model = RandomForestClassifier(
+    # Random Forest — used for final predictions and feature importance.
+    rf = RandomForestClassifier(
         n_estimators=150,
         max_depth=7,
         min_samples_leaf=2,
@@ -1421,27 +1428,55 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         n_jobs=-1,
         class_weight="balanced_subsample",
     )
-    model.fit(X_train, y_train)
-
-    predictions = model.predict(X_test)
-    accuracy = accuracy_score(y_test, predictions)
+    rf.fit(X_train, y_train)
+    rf_accuracy = accuracy_score(y_test, rf.predict(X_test))
 
     importance = pd.DataFrame(
-        {
-            "Feature": X.columns,
-            "Importance": model.feature_importances_,
-        }
+        {"Feature": X.columns, "Importance": rf.feature_importances_}
     ).sort_values("Importance", ascending=False)
     importance = importance[importance["Importance"] > 0].head(12)
 
+    # Logistic Regression — simpler model used as a sanity check.
+    # StandardScaler is required because LR is sensitive to feature scale.
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    lr = LogisticRegression(
+        max_iter=1000,
+        random_state=random_state,
+        class_weight="balanced",
+    )
+    lr.fit(X_train_scaled, y_train)
+    lr_accuracy = accuracy_score(y_test, lr.predict(X_test_scaled))
+
+    # Overfitting warning: RF >> LR on a small dataset is a red flag.
+    overfit_warning = None
+    if rf_accuracy - lr_accuracy > 0.15:
+        overfit_warning = (
+            f"Random Forest ({rf_accuracy:.0%}) is more than 15 points ahead of "
+            f"Logistic Regression ({lr_accuracy:.0%}). On a small dataset this often "
+            "means the RF memorized the training data. Treat feature importance and "
+            "predictions with extra caution."
+        )
+    elif rf_accuracy > 0.85 and len(model_df) < 100:
+        overfit_warning = (
+            f"RF accuracy is {rf_accuracy:.0%} with only {len(model_df)} labeled rows. "
+            "High accuracy on very small datasets is often a sign of overfitting. "
+            "The Logistic Regression result is likely more reliable here."
+        )
+
     return {
         "ok": True,
-        "model": model,
+        "model": rf,
+        "scaler": scaler,
         "feature_columns": list(X.columns),
-        "accuracy": float(accuracy),
+        "rf_accuracy": float(rf_accuracy),
+        "lr_accuracy": float(lr_accuracy),
         "training_rows": len(X_train),
         "testing_rows": len(X_test),
         "importance": importance,
+        "overfit_warning": overfit_warning,
     }
 
 
