@@ -273,16 +273,8 @@ def main() -> None:
         type=["csv", "xlsx", "xlsm", "xls"],
         help="Upload Combined_Data.xlsx or another CHEM 120 survey/database file.",
     )
-    uploaded_atomic = st.sidebar.file_uploader(
-        "AtomicMass.csv (optional)",
-        type=["csv"],
-        help="Optional. The package already includes AtomicMass.csv.",
-    )
-    uploaded_en = st.sidebar.file_uploader(
-        "PaulingEN.csv (optional)",
-        type=["csv"],
-        help="Optional. Add electronegativity descriptors if you have this file.",
-    )
+    uploaded_atomic = None
+    uploaded_en = None
 
     st.sidebar.markdown("### 2. Controls")
     z_threshold = st.sidebar.slider(
@@ -341,19 +333,15 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Load class data. Uploaded file has priority, then local default, then demo.
     # -------------------------------------------------------------------------
-    data_source = "Demo dataset"
     try:
         if uploaded_data is not None:
             raw_df = read_table_from_bytes(uploaded_data.getvalue(), uploaded_data.name)
-            data_source = uploaded_data.name
         else:
             default_path = find_default_database()
             if default_path is not None:
                 raw_df = read_local_table(str(default_path))
-                data_source = default_path.name
             else:
                 raw_df = make_demo_dataset()
-                data_source = "Built-in demo dataset"
     except Exception as exc:
         st.error(f"Could not load class data: {exc}")
         st.stop()
@@ -390,20 +378,8 @@ def main() -> None:
     yes_count = int(described_df["BubbleYes"].sum()) if "BubbleYes" in described_df.columns else 0
 
     # -------------------------------------------------------------------------
-    # Status strip + data health cards.
+    # Data health cards.
     # -------------------------------------------------------------------------
-    status_cols = st.columns(5)
-    with status_cols[0]:
-        st.metric("Data source", data_source)
-    with status_cols[1]:
-        st.metric("Raw rows", f"{len(raw_df):,}")
-    with status_cols[2]:
-        st.metric("Compound rows", f"{len(described_df):,}")
-    with status_cols[3]:
-        st.metric("Validation issues", f"{len(issues_df):,}")
-    with status_cols[4]:
-        st.metric("Bubble yes", f"{yes_count:,}")
-
     health_cols = st.columns(3)
     with health_cols[0]:
         style = "status-ok" if len(described_df) > 0 else "status-bad"
@@ -505,7 +481,8 @@ def main() -> None:
         instructors = sorted([x for x in described_df.get("Instructor", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
         selected_instructors = st.multiselect("Instructor filter", instructors, default=instructors)
     with filter_cols[2]:
-        min_rows = st.number_input("Minimum rows per element", min_value=1, max_value=50, value=1, step=1)
+        hide_rare = st.checkbox("Hide elements with fewer than 3 compounds", value=True)
+        min_rows = 3 if hide_rare else 1
 
     filtered = described_df.copy()
     if selected_semesters:
@@ -710,20 +687,26 @@ def main() -> None:
 
             p1, p2, p3 = st.columns(3)
             with p1:
-                pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
                 pred_a = st.text_input("A-site element", value="La", key="pred_a")
                 pred_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
-                pred_ap = st.text_input("A′-site element", value="", key="pred_ap")
-                pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
             with p2:
                 pred_b = st.text_input("B-site element", value="Ni", key="pred_b")
                 pred_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
-                pred_bp = st.text_input("B′-site element", value="", key="pred_bp")
-                pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
             with p3:
-                pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
-                pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
                 pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
+                pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
+
+            with st.expander("Mixed-site elements (advanced)"):
+                adv1, adv2, adv3 = st.columns(3)
+                with adv1:
+                    pred_ap = st.text_input("A′-site element", value="", key="pred_ap")
+                    pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
+                with adv2:
+                    pred_bp = st.text_input("B′-site element", value="", key="pred_bp")
+                    pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
+                with adv3:
+                    pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
+                    pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
             if st.button("Predict bubble probability", type="primary"):
                 pred_row = make_single_prediction_row(
