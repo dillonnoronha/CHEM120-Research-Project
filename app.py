@@ -473,13 +473,16 @@ def main() -> None:
         "Compare compounds and look for patterns. These graphs are descriptive — not proof of causation."
     )
 
-    filter_cols = st.columns(3)
+    semesters = sorted([x for x in described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
+    instructors = sorted([x for x in described_df.get("Instructor", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
+
+    filter_cols = st.columns([2, 3, 2])
     with filter_cols[0]:
-        semesters = sorted([x for x in described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
-        selected_semesters = st.multiselect("Semester filter", semesters, default=semesters)
+        selected_semesters = st.pills("Semester", semesters, default=semesters, selection_mode="multi", label_visibility="collapsed")
+        st.caption("Semester")
     with filter_cols[1]:
-        instructors = sorted([x for x in described_df.get("Instructor", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
-        selected_instructors = st.multiselect("Instructor filter", instructors, default=instructors)
+        selected_instructors = st.pills("Instructor", instructors, default=instructors, selection_mode="multi", label_visibility="collapsed")
+        st.caption("Instructor")
     with filter_cols[2]:
         hide_rare = st.checkbox("Hide elements with fewer than 3 compounds", value=True)
         min_rows = 3 if hide_rare else 1
