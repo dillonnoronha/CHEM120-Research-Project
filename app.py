@@ -628,7 +628,7 @@ def main() -> None:
     # =========================================================================
     # TABS: ML LAB | ADD COMPOUND | EXPORT
     # =========================================================================
-    action_tabs = st.tabs(["🤖 ML Lab", "➕ Add Compound", "⬇️ Export"])
+    action_tabs = st.tabs(["🤖 ML Lab", "➕ Add Compound", "⬇️ Export", "🔄 New Semester"])
 
     # -------------------------------------------------------------------------
     # TAB: ML LAB
@@ -933,6 +933,91 @@ def main() -> None:
             - The app never overwrites your original file.
             """
         )
+
+    # -------------------------------------------------------------------------
+    # TAB: NEW SEMESTER
+    # -------------------------------------------------------------------------
+    with action_tabs[3]:
+        st.subheader("Prepare New Semester Data")
+        st.write(
+            "Upload a new semester's raw Excel file. The app will split each group's "
+            "row into one row per compound, then merge it with the current dataset so "
+            "you can download one combined file."
+        )
+
+        new_sem_file = st.file_uploader(
+            "New semester Excel file",
+            type=["xlsx", "xlsm", "xls"],
+            help="The raw export where each row is one group and compounds are in columns like 1A, 1AN, 2A, 2AN…",
+            key="new_semester_upload",
+        )
+
+        if new_sem_file is None:
+            st.info("Upload the new semester file above to get started.")
+        else:
+            try:
+                new_raw = read_table_from_bytes(new_sem_file.getvalue(), new_sem_file.name)
+            except Exception as exc:
+                st.error(f"Could not read file: {exc}")
+                st.stop()
+
+            new_long, new_warnings = normalize_to_long_format(new_raw)
+
+            if new_warnings:
+                with st.expander("⚠️ Column mapping problems in new file", expanded=True):
+                    st.warning(
+                        "Some required columns could not be matched. "
+                        "Check that the column names follow the expected pattern (1A, 1AN, 1B, 1BN…). "
+                        "See DEVELOPER_NOTES.md for fix instructions."
+                    )
+                    for w in new_warnings:
+                        st.markdown(f"- {w}")
+
+            if new_long.empty:
+                st.error("No compound rows could be extracted from the uploaded file. Check the column names.")
+            else:
+                # Preview stats
+                stat_cols = st.columns(3)
+                with stat_cols[0]:
+                    st.metric("Groups in new file", f"{len(new_raw):,}")
+                with stat_cols[1]:
+                    st.metric("Compound rows extracted", f"{len(new_long):,}")
+                with stat_cols[2]:
+                    st.metric("Existing compound rows", f"{len(long_df):,}")
+
+                st.markdown("#### Preview — first 10 rows from new semester")
+                preview_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "B", "BN", "O", "ON", "P", "Bub"] if c in new_long.columns]
+                st.dataframe(new_long[preview_cols].head(10), use_container_width=True)
+
+                # Check for semester overlap
+                existing_semesters = set(long_df["Semester"].dropna().astype(str).unique())
+                new_semesters = set(new_long["Semester"].dropna().astype(str).unique())
+                overlap = existing_semesters & new_semesters
+                if overlap:
+                    st.warning(
+                        f"The new file contains semester(s) already in the existing dataset: "
+                        f"**{', '.join(sorted(overlap))}**. "
+                        "Check that you are not adding duplicate data."
+                    )
+                else:
+                    st.success(f"No semester overlap detected. New semesters: **{', '.join(sorted(new_semesters)) or 'unknown'}**")
+
+                merged = pd.concat([long_df, new_long], ignore_index=True)
+
+                st.markdown(f"#### Merged dataset — {len(merged):,} total compound rows")
+
+                dl_bytes = dataframe_to_excel_bytes(merged, "Combined_Data")
+                st.download_button(
+                    "⬇️ Download merged Combined_Data.xlsx",
+                    dl_bytes,
+                    file_name="Combined_Data_merged.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                )
+                st.caption(
+                    "Replace your existing data/Combined_Data.xlsx with this file "
+                    "and the app will load the full merged dataset on next startup."
+                )
 
 
 if __name__ == "__main__":
