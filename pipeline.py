@@ -40,7 +40,7 @@ import streamlit as st
 try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import accuracy_score
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
     from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
 
@@ -1508,7 +1508,11 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         class_weight="balanced_subsample",
     )
     rf.fit(X_train, y_train)
-    rf_accuracy = accuracy_score(y_test, rf.predict(X_test))
+    rf_preds = rf.predict(X_test)
+    rf_accuracy = accuracy_score(y_test, rf_preds)
+    rf_precision = precision_score(y_test, rf_preds, zero_division=0)
+    rf_recall = recall_score(y_test, rf_preds, zero_division=0)
+    rf_f1 = f1_score(y_test, rf_preds, zero_division=0)
 
     importance = pd.DataFrame(
         {"Feature": X.columns, "Importance": rf.feature_importances_}
@@ -1528,6 +1532,16 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
     )
     lr.fit(X_train_scaled, y_train)
     lr_accuracy = accuracy_score(y_test, lr.predict(X_test_scaled))
+
+    # Baseline: a naive model that always predicts the majority class.
+    majority_class = int(y_train.mode()[0])
+    baseline_preds = [majority_class] * len(y_test)
+    baseline_accuracy = accuracy_score(y_test, baseline_preds)
+
+    # Class balance across the full labeled dataset.
+    yes_count = int((y == 1).sum())
+    no_count = int((y == 0).sum())
+    yes_rate = yes_count / len(y) if len(y) > 0 else 0.0
 
     # Overfitting warning: RF >> LR on a small dataset is a red flag.
     overfit_warning = None
@@ -1551,7 +1565,14 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         "scaler": scaler,
         "feature_columns": list(X.columns),
         "rf_accuracy": float(rf_accuracy),
+        "rf_precision": float(rf_precision),
+        "rf_recall": float(rf_recall),
+        "rf_f1": float(rf_f1),
         "lr_accuracy": float(lr_accuracy),
+        "baseline_accuracy": float(baseline_accuracy),
+        "yes_count": yes_count,
+        "no_count": no_count,
+        "yes_rate": float(yes_rate),
         "training_rows": len(X_train),
         "testing_rows": len(X_test),
         "importance": importance,
