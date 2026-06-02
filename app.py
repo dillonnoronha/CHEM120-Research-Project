@@ -648,27 +648,62 @@ def main() -> None:
             if ml_result.get("overfit_warning"):
                 st.warning(ml_result["overfit_warning"])
 
+            # Class balance — critical context for interpreting accuracy.
+            yes_count = ml_result["yes_count"]
+            no_count = ml_result["no_count"]
+            yes_rate = ml_result["yes_rate"]
+            baseline = ml_result["baseline_accuracy"]
+            rf_acc = ml_result["rf_accuracy"]
+
+            st.markdown("#### Dataset balance")
+            bal_cols = st.columns(3)
+            with bal_cols[0]:
+                st.metric("Bubble = yes", f"{yes_count:,}", help="Compounds where students observed bubbles.")
+            with bal_cols[1]:
+                st.metric("Bubble = no / maybe", f"{no_count:,}", help="Compounds where no bubbles were observed.")
+            with bal_cols[2]:
+                st.metric("Yes rate", f"{yes_rate:.0%}", help="Fraction of labeled compounds that bubbled.")
+
+            majority_label = "no/maybe" if yes_rate < 0.5 else "yes"
+            beat_baseline = rf_acc > baseline
+            baseline_note = (
+                f"A model that **always guesses '{majority_label}'** would get **{baseline:.0%}** accuracy. "
+                f"The Random Forest gets **{rf_acc:.0%}** — "
+                + ("**better than the baseline**, meaning it found a real signal." if beat_baseline
+                   else "**not better than the baseline**, meaning it has not found a useful signal yet.")
+            )
+            if beat_baseline:
+                st.success(baseline_note)
+            else:
+                st.warning(baseline_note)
+
+            st.markdown("#### Model performance")
             ml_cols = st.columns(4)
             with ml_cols[0]:
-                st.metric("Random Forest accuracy", f"{ml_result['rf_accuracy']:.0%}")
+                st.metric("RF accuracy", f"{rf_acc:.0%}",
+                          delta=f"{rf_acc - baseline:+.0%} vs baseline",
+                          help="Overall fraction of test compounds predicted correctly.")
             with ml_cols[1]:
-                st.metric("Logistic Regression accuracy", f"{ml_result['lr_accuracy']:.0%}")
+                st.metric("LR accuracy", f"{ml_result['lr_accuracy']:.0%}",
+                          help="Simpler model — use as a sanity check.")
             with ml_cols[2]:
-                st.metric("Training rows", ml_result["training_rows"])
+                st.metric("Precision (yes)", f"{ml_result['rf_precision']:.0%}",
+                          help="When the model predicts bubble=yes, how often it is actually right.")
             with ml_cols[3]:
-                st.metric("Testing rows", ml_result["testing_rows"])
+                st.metric("Recall (yes)", f"{ml_result['rf_recall']:.0%}",
+                          help="Of all compounds that actually bubbled, how many the model correctly identified.")
 
-            with st.expander("Why two models?"):
+            with st.expander("How to read these numbers"):
                 st.markdown(
-                    """
-                    **Random Forest** is more powerful but can memorize small datasets
-                    (overfitting), making its accuracy look better than it really is.
-
-                    **Logistic Regression** is simpler and gives a more honest baseline.
-                    If both agree, the result is more trustworthy. If Random Forest is
-                    much higher, treat its predictions with extra caution.
-
-                    Predictions below use the Random Forest model.
+                    f"""
+                    - **Accuracy** alone is misleading when bubble=yes is rare.
+                      The naive baseline ({baseline:.0%}) shows what you get for free just by guessing the majority class.
+                    - **Precision** answers: *"When the model says yes, should I believe it?"*
+                      {ml_result['rf_precision']:.0%} means roughly {ml_result['rf_precision']:.0%} of its yes predictions are correct.
+                    - **Recall** answers: *"Does the model catch most of the bubbling compounds?"*
+                      {ml_result['rf_recall']:.0%} means it identified {ml_result['rf_recall']:.0%} of the compounds that actually bubbled.
+                    - **Logistic Regression** is a simpler model used as a sanity check.
+                      If both models agree, the result is more trustworthy.
                     """
                 )
 
