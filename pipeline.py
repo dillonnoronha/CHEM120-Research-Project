@@ -626,15 +626,15 @@ def infer_slot_column(columns: Iterable[str], slot: int, field: str) -> Optional
 @st.cache_data(show_spinner=False)
 def normalize_to_long_format(raw_df: pd.DataFrame) -> tuple:
     """
-    Convert the uploaded wide spreadsheet into one row per compound.
+    Convert the uploaded spreadsheet into one row per compound.
 
-    Example input:
+    Handles two formats automatically:
+
+    Wide format (one row per group, multiple compounds as column sets):
         Group | 1A | 1AN | 1B | 1BN | 2A | 2AN | 2B | 2BN
 
-    Example output:
-        Group | Slot | A | AN | B | BN
-        Group | 1    | ...
-        Group | 2    | ...
+    Long format (one row per compound, already expanded):
+        Group | Compound_Num | A | AN | B | BN | ...
 
     Returns (DataFrame, list[str]) where the list contains warnings about
     required columns that could not be matched. An empty list means all
@@ -645,6 +645,85 @@ def normalize_to_long_format(raw_df: pd.DataFrame) -> tuple:
         return pd.DataFrame(), []
 
     columns = list(raw_df.columns)
+    _ncols = {normalize_key(c): c for c in columns}
+
+    # Long-format detection: if the file already has direct column names like
+    # A, B, AN, BN (no slot-number prefix), skip the wide-to-long expansion
+    # and map each row directly as one compound record.
+    if "a" in _ncols and "b" in _ncols:
+        _field_aliases: Dict[str, List[str]] = {
+            "FormulaRef": ["formularef", "formula", "fullformula", "compound", "referenceformula"],
+            "A":    ["a", "asite", "asiteelement", "aelement"],
+            "AN":   ["an", "aratio", "asiteratio", "aamount"],
+            "AP":   ["ap", "aprime", "asiteprime", "aprimeelement"],
+            "APN":  ["apn", "aprimeratio", "apratio", "asiteprimeratio"],
+            "B":    ["b", "bsite", "bsiteelement", "belement"],
+            "BN":   ["bn", "bratio", "bsiteratio", "bamount"],
+            "BP":   ["bp", "bprime", "bsiteprime", "bprimeelement"],
+            "BPN":  ["bpn", "bprimeratio", "bpratio", "bsiteprimeratio"],
+            "BDP":  ["bdp", "bdprime", "bdoubleprime", "bsite2prime", "b2prime"],
+            "BDPN": ["bdpn", "bdprimeratio", "bdoubleprimeratio", "b2primeratio"],
+            "O":    ["o", "oxygen", "oxygenelement"],
+            "ON":   ["on", "oratio", "oxygenratio", "oxygenamount"],
+            "P":    ["p", "phase"],
+            "PN":   ["pn", "phasen", "phasenumber"],
+            "Bub":  ["bub", "bubble", "bubbleresponse", "h2bubble", "bubbles"],
+            "BubN": ["bubn", "bubblen", "bubblenumber", "bubbleresponsen"],
+        }
+        _meta_aliases: Dict[str, List[str]] = {
+            "GroupNumber": ["groupnumber", "groupid", "group", "team", "groupnumberid"],
+            "Email":       ["email", "emailaddress"],
+            "Name":        ["name", "studentname"],
+            "Members":     ["members", "groupmembers"],
+            "Instructor":  ["instructor", "instructorsection", "section"],
+            "Semester":    ["semester", "semesteryear", "term", "year"],
+        }
+
+        field_map: Dict[str, Optional[str]] = {}
+        for field, aliases in _field_aliases.items():
+            for alias in aliases:
+                if alias in _ncols:
+                    field_map[field] = _ncols[alias]
+                    break
+            else:
+                field_map[field] = None
+
+        meta_map: Dict[str, Optional[str]] = {}
+        for out_name, aliases in _meta_aliases.items():
+            for alias in aliases:
+                if alias in _ncols:
+                    meta_map[out_name] = _ncols[alias]
+                    break
+            else:
+                meta_map[out_name] = None
+
+        compound_num_col = (
+            _ncols.get("compoundnum")
+            or _ncols.get("compoundnumber")
+            or _ncols.get("compound")
+        )
+
+        rows: List[dict] = []
+        for source_index, source_row in raw_df.iterrows():
+            record: dict = {
+                out: source_row.get(col, "") if col is not None else ""
+                for out, col in meta_map.items()
+            }
+            record["SourceRow"] = int(source_index) + 2
+            if compound_num_col and not is_blank(source_row.get(compound_num_col)):
+                try:
+                    record["Slot"] = int(float(source_row[compound_num_col]))
+                except (ValueError, TypeError):
+                    record["Slot"] = 1
+            else:
+                record["Slot"] = 1
+
+            for field, col in field_map.items():
+                record[field] = source_row.get(col, "") if col is not None else ""
+
+            rows.append(record)
+
+        return pd.DataFrame(rows), []
 
     # Map common metadata fields. If a column is not present, the app simply
     # leaves that metadata blank.
