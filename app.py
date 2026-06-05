@@ -22,6 +22,7 @@ from pipeline import (
     add_chemical_descriptors,
     bubble_relationships,
     build_feature_matrix,
+    chi_squared_tests,
     clean_and_encode_data,
     dataframe_to_csv_bytes,
     dataframe_to_excel_bytes,
@@ -43,7 +44,7 @@ from pipeline import (
     read_local_table,
     read_table_from_bytes,
     summarize_by_element,
-    train_ml_model,
+    train_classification_model,
     validate_compound_rows,
 )
 
@@ -636,93 +637,138 @@ def main() -> None:
     with action_tabs[0]:
         st.subheader("ML Lab")
         st.write(
-            "Trains a model to estimate whether a compound looks similar to past compounds labeled bubble = yes."
+            "Train models to find patterns in two outcomes: whether a compound **bubbles** "
+            "and whether it comes out **pure**. Use this as a hypothesis tool, not proof."
         )
-        st.info("Use this as a hypothesis tool. It should not be treated as proof that a compound will work.")
+        st.info("Predictions describe patterns in past class data. They are not a guarantee of how a new compound will behave.")
 
-        ml_result = train_ml_model(described_df, use_phase=use_phase_in_ml)
+        target_label = st.radio(
+            "What do you want to predict?",
+            ["Bubbling (yes vs no)", "Purity (pure vs impure)"],
+            horizontal=True,
+            key="ml_target",
+        )
+        target = "bubble" if target_label.startswith("Bubbling") else "purity"
+
+        ml_result = train_classification_model(described_df, target=target, use_phase=use_phase_in_ml)
 
         if not ml_result.get("ok"):
-            st.warning(ml_result.get("message", "ML model could not be trained."))
+            st.warning(ml_result.get("message", "Model could not be trained."))
         else:
-            if ml_result.get("overfit_warning"):
-                st.warning(ml_result["overfit_warning"])
-
-            # Class balance — critical context for interpreting accuracy.
-            yes_count = ml_result["yes_count"]
-            no_count = ml_result["no_count"]
-            yes_rate = ml_result["yes_rate"]
+            pos_name = ml_result["pos_name"]
+            neg_name = ml_result["neg_name"]
+            pos_count = ml_result["pos_count"]
+            neg_count = ml_result["neg_count"]
+            pos_rate = ml_result["pos_rate"]
             baseline = ml_result["baseline_accuracy"]
-            rf_acc = ml_result["rf_accuracy"]
+            best = ml_result["best"]
+            best_name = ml_result["model_name"]
 
+            # --- Dataset balance ---
             st.markdown("#### Dataset balance")
             bal_cols = st.columns(3)
             with bal_cols[0]:
-                st.metric("Bubble = yes", f"{yes_count:,}", help="Compounds where students observed bubbles.")
+                st.metric(pos_name, f"{pos_count:,}")
             with bal_cols[1]:
-                st.metric("Bubble = no / maybe", f"{no_count:,}", help="Compounds where no bubbles were observed.")
+                st.metric(neg_name, f"{neg_count:,}")
             with bal_cols[2]:
-                st.metric("Yes rate", f"{yes_rate:.0%}", help="Fraction of labeled compounds that bubbled.")
+                st.metric(f"{pos_name} rate", f"{pos_rate:.0%}",
+                          help=f"Fraction of labeled compounds that are {pos_name}.")
 
-            majority_label = "no/maybe" if yes_rate < 0.5 else "yes"
-            beat_baseline = rf_acc > baseline
+            # --- Baseline comparison ---
+            majority_name = pos_name if pos_rate >= 0.5 else neg_name
             baseline_note = (
-                f"A model that **always guesses '{majority_label}'** would get **{baseline:.0%}** accuracy. "
-                f"The Random Forest gets **{rf_acc:.0%}** — "
-                + ("**better than the baseline**, meaning it found a real signal." if beat_baseline
-                   else "**not better than the baseline**, meaning it has not found a useful signal yet.")
+                f"A naive model that **always guesses '{majority_name}'** scores **{baseline:.0%}** accuracy. "
+                f"The best model ({best_name}) scores **{best['accuracy']:.0%}** accuracy and "
+                f"**{best['balanced_accuracy']:.0%}** balanced accuracy."
             )
-            if beat_baseline:
-                st.success(baseline_note)
+            # Balanced accuracy is the honest score on imbalanced data: 50% = random.
+            if best["balanced_accuracy"] > 0.58:
+                st.success(baseline_note + "  The model finds a real, usable signal.")
+            elif best["balanced_accuracy"] > 0.53:
+                st.info(baseline_note + "  The model finds a weak but real signal.")
             else:
-                st.warning(baseline_note)
+                st.warning(baseline_note + "  The model barely beats guessing — treat predictions with caution.")
 
-            st.markdown("#### Model performance")
-            ml_cols = st.columns(4)
-            with ml_cols[0]:
-                st.metric("RF accuracy", f"{rf_acc:.0%}",
-                          delta=f"{rf_acc - baseline:+.0%} vs baseline",
-                          help="Overall fraction of test compounds predicted correctly.")
-            with ml_cols[1]:
-                st.metric("LR accuracy", f"{ml_result['lr_accuracy']:.0%}",
-                          help="Simpler model — use as a sanity check.")
-            with ml_cols[2]:
-                st.metric("Precision (yes)", f"{ml_result['rf_precision']:.0%}",
-                          help="When the model predicts bubble=yes, how often it is actually right.")
-            with ml_cols[3]:
-                st.metric("Recall (yes)", f"{ml_result['rf_recall']:.0%}",
-                          help="Of all compounds that actually bubbled, how many the model correctly identified.")
+            # --- Three-model comparison ---
+            st.markdown("#### Model comparison")
+            st.caption(
+                "Three algorithms on the same train/test split. **Balanced accuracy** and **ROC-AUC** "
+                "are the fair scores when one class is more common (50% / 0.50 = random guessing)."
+            )
+            comparison = pd.DataFrame(
+                [
+                    {"Model": "Random Forest", **ml_result["rf"]},
+                    {"Model": "Gradient Boosting", **ml_result["gb"]},
+                    {"Model": "Logistic Regression", **ml_result["lr"]},
+                ]
+            )
+            comparison = comparison.rename(columns={
+                "accuracy": "Accuracy",
+                "balanced_accuracy": "Balanced acc.",
+                "precision": "Precision",
+                "recall": "Recall",
+                "f1": "F1",
+                "roc_auc": "ROC-AUC",
+            })
+            show = comparison.copy()
+            for c in ["Accuracy", "Balanced acc.", "Precision", "Recall"]:
+                show[c] = (show[c] * 100).round(0).astype(int).astype(str) + "%"
+            show["F1"] = comparison["F1"].round(2)
+            show["ROC-AUC"] = comparison["ROC-AUC"].round(2)
+            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.caption(f"Predictions below use the best model: **{best_name}**.")
 
-            with st.expander("How to read these numbers"):
+            with st.expander("What do these numbers mean?"):
                 st.markdown(
                     f"""
-                    - **Accuracy** alone is misleading when bubble=yes is rare.
-                      The naive baseline ({baseline:.0%}) shows what you get for free just by guessing the majority class.
-                    - **Precision** answers: *"When the model says yes, should I believe it?"*
-                      {ml_result['rf_precision']:.0%} means roughly {ml_result['rf_precision']:.0%} of its yes predictions are correct.
-                    - **Recall** answers: *"Does the model catch most of the bubbling compounds?"*
-                      {ml_result['rf_recall']:.0%} means it identified {ml_result['rf_recall']:.0%} of the compounds that actually bubbled.
-                    - **Logistic Regression** is a simpler model used as a sanity check.
-                      If both models agree, the result is more trustworthy.
+                    - **Accuracy** — fraction correct overall. Misleading when one class dominates
+                      (the naive baseline here is {baseline:.0%}).
+                    - **Balanced accuracy** — average of how well it identifies each class. 50% = random.
+                      This is the honest headline number.
+                    - **Precision** — when the model predicts *{pos_name}*, how often it is right.
+                    - **Recall** — of all the actual *{pos_name}* compounds, how many it caught.
+                    - **ROC-AUC** — overall ranking quality. 0.50 = random, 1.00 = perfect.
+                    - **Gradient Boosting** is the modern "best tool" for this kind of table; **Random Forest**
+                      and **Logistic Regression** are shown for comparison. If they roughly agree, trust the result more.
                     """
                 )
 
-            st.markdown("#### What features did the model use most?")
+            # --- Permutation importance ---
+            st.markdown("#### Which features mattered most?")
             importance = ml_result["importance"]
             if importance.empty:
-                st.info("Feature importance is not available.")
+                st.info("No feature stood out above noise — another sign the signal is weak for this target.")
             else:
                 st.pyplot(
-                    plot_bar_chart(importance, "Feature", "Importance", "Top model features", "Importance"),
+                    plot_bar_chart(importance, "Feature", "Importance", f"Top features for predicting {ml_result['outcome_name']}", "Permutation importance"),
                     use_container_width=True,
                 )
                 st.caption(
-                    "Higher importance means the model relied on that feature more often when making predictions."
+                    "Measured by **permutation importance**: how much accuracy drops when each feature is shuffled. "
+                    "This is fair across element (categorical) and mass/ratio (numeric) features, unlike the default "
+                    "tree importance which over-weights numeric features like mass."
                 )
 
-            st.markdown("### Test a proposed compound")
-            st.write("Enter a compound below. The model will estimate the chance of `bubble = yes` based on past data.")
+            # --- Chi-squared tests ---
+            st.markdown("#### Chi-squared test of independence")
+            st.caption(
+                f"Tests whether each element position is statistically associated with the {ml_result['outcome_name']} "
+                "outcome. A small p-value (< 0.05) means the association is unlikely to be chance."
+            )
+            chi = chi_squared_tests(described_df, target=target)
+            if chi.empty:
+                st.info("Not enough categorical data to run the chi-squared test.")
+            else:
+                chi_show = chi.copy()
+                chi_show["p-value"] = chi_show["p-value"].apply(lambda p: f"{p:.2e}" if p < 0.001 else f"{p:.3f}")
+                st.dataframe(chi_show, use_container_width=True, hide_index=True)
 
+            # --- Interactive prediction ---
+            st.markdown(f"### Test a proposed compound — will it be {pos_name}?")
+            st.write(f"Enter a compound. The model estimates the chance of **{pos_name}** based on past data.")
+
+            uses_phase_input = ml_result["feature_use_phase"]
             p1, p2, p3 = st.columns(3)
             with p1:
                 pred_a = st.text_input("A-site element", value="La", key="pred_a")
@@ -732,7 +778,11 @@ def main() -> None:
                 pred_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
             with p3:
                 pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
-                pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
+                if uses_phase_input:
+                    pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
+                else:
+                    pred_phase = "pure"  # placeholder; phase is not a feature for the purity model
+                    st.caption("Phase is the outcome being predicted, so it is not an input here.")
 
             with st.expander("Mixed-site elements (advanced)"):
                 adv1, adv2, adv3 = st.columns(3)
@@ -746,19 +796,20 @@ def main() -> None:
                     pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
                     pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
-            if st.button("Predict bubble probability", type="primary"):
+            if st.button(f"Predict {pos_name} probability", type="primary"):
                 pred_row = make_single_prediction_row(
                     atomic, en_table, pred_phase, pred_a, pred_an, pred_ap, pred_apn,
                     pred_b, pred_bn, pred_bp, pred_bpn, pred_bdp, pred_bdpn, pred_on
                 )
                 pred_features = build_feature_matrix(
                     pred_row,
-                    use_phase=use_phase_in_ml,
+                    use_phase=uses_phase_input,
                     expected_columns=ml_result["feature_columns"],
                 )
                 probability = ml_result["model"].predict_proba(pred_features)[0][1]
                 formula = pred_row.iloc[0]["Formula"]
-                st.success(f"Predicted bubble=yes probability for **{formula}**: **{probability:.1%}**")
+                st.success(f"Predicted **{pos_name}** probability for **{formula}**: **{probability:.1%}**")
+                st.caption(f"Estimated by the {best_name} model.")
                 st.dataframe(
                     pred_row[[c for c in ordered_columns(pred_row) if c in pred_row.columns]],
                     use_container_width=True,

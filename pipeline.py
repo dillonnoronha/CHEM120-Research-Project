@@ -38,9 +38,17 @@ import pandas as pd
 import streamlit as st
 
 try:
-    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    from sklearn.metrics import (
+        accuracy_score,
+        balanced_accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+        roc_auc_score,
+    )
+    from sklearn.inspection import permutation_importance
     from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
 
@@ -49,6 +57,13 @@ except Exception:
     # The rest of the app works without scikit-learn.
     # Only the ML Lab tab will be disabled if sklearn is missing.
     SKLEARN_AVAILABLE = False
+
+try:
+    from scipy.stats import chi2_contingency
+
+    SCIPY_AVAILABLE = True
+except Exception:
+    SCIPY_AVAILABLE = False
 
 
 # =============================================================================
@@ -1456,51 +1471,131 @@ def build_feature_matrix(
     return features
 
 
-@st.cache_data(show_spinner=False)
-def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int = 42) -> dict:
+# Prediction targets the ML Lab can model. Each defines how a clean two-class
+# problem is built from the cleaned data. "maybe" (bubble) and "not made"
+# (phase) are dropped because they are not real positive/negative outcomes.
+TARGET_CONFIG = {
+    "bubble": {
+        "label_col": "Bub",
+        "positive": "yes",
+        "negative": "no",
+        "pos_name": "bubble = yes",
+        "neg_name": "bubble = no",
+        "outcome_name": "bubbling",
+        # Phase (pure/impure) is allowed as a predictor for bubbling.
+        "uses_phase_feature": True,
+    },
+    "purity": {
+        "label_col": "P",
+        "positive": "pure",
+        "negative": "impure",
+        "pos_name": "pure",
+        "neg_name": "impure",
+        "outcome_name": "purity",
+        # Phase IS the target here, so it can never be a feature.
+        "uses_phase_feature": False,
+    },
+}
+
+# Friendly names for categorical variables used in chi-squared tests.
+CATEGORICAL_VARIABLE_NAMES = {
+    "A": "A-site element",
+    "AP": "A′-site element",
+    "B": "B-site element",
+    "BP": "B′-site element",
+    "BDP": "B″-site element",
+}
+
+
+def prepare_target(df: pd.DataFrame, target: str) -> Tuple[pd.DataFrame, pd.Series, dict]:
     """
-    Train a Random Forest and a Logistic Regression model to predict Bubble = yes.
+    Build a clean two-class dataset for the requested target.
 
-    Both models share the same train/test split so accuracy numbers are directly
-    comparable. The RF model is used for predictions; LR serves as a sanity check.
+    Keeps only rows whose label is the positive or negative class (e.g. for
+    bubbling, only yes/no rows — "maybe" is dropped). Returns the filtered
+    DataFrame, the binary target series y (1 = positive class), and the config.
+    """
 
-    Overfitting warning is raised when RF accuracy is suspiciously high relative
-    to LR, or when RF accuracy exceeds 85% on fewer than 100 labeled rows.
+    cfg = TARGET_CONFIG[target]
+    col = cfg["label_col"]
+    model_df = df[df[col].isin([cfg["positive"], cfg["negative"]])].copy()
+    y = (model_df[col] == cfg["positive"]).astype(int)
+    return model_df, y, cfg
 
-    Returns a dict with both models' results, or {"ok": False, "message": ...}.
+
+def _score_model(model, X_eval, y_eval) -> dict:
+    """Compute the full set of classification metrics for one fitted model."""
+
+    preds = model.predict(X_eval)
+    try:
+        proba = model.predict_proba(X_eval)[:, 1]
+        auc = float(roc_auc_score(y_eval, proba))
+    except Exception:
+        auc = float("nan")
+    return {
+        "accuracy": float(accuracy_score(y_eval, preds)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_eval, preds)),
+        "precision": float(precision_score(y_eval, preds, zero_division=0)),
+        "recall": float(recall_score(y_eval, preds, zero_division=0)),
+        "f1": float(f1_score(y_eval, preds, zero_division=0)),
+        "roc_auc": auc,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def train_classification_model(
+    df: pd.DataFrame,
+    target: str = "bubble",
+    use_phase: bool = True,
+    random_state: int = 42,
+) -> dict:
+    """
+    Train Random Forest, Gradient Boosting, and Logistic Regression for a target.
+
+    target:
+        "bubble"  -> predict bubble = yes vs no (maybe dropped)
+        "purity"  -> predict pure vs impure (not made dropped)
+
+    All three models share one train/test split so scores are comparable. The
+    best tree model (RF or GB, by balanced accuracy) is returned for predictions.
+    Logistic Regression is a scaled sanity-check baseline. Feature importance is
+    computed by PERMUTATION, which is fair across numeric and categorical
+    features (the default tree importance over-weights continuous features).
+
+    Returns a results dict, or {"ok": False, "message": ...}.
     """
 
     if not SKLEARN_AVAILABLE:
         return {"ok": False, "message": "scikit-learn is not installed. Install requirements.txt to use ML Lab."}
+    if target not in TARGET_CONFIG:
+        return {"ok": False, "message": f"Unknown prediction target: {target}"}
 
-    model_df = df.dropna(subset=["BubbleYes"]).copy()
-    model_df = model_df[model_df["Bub"].isin(["yes", "no", "maybe"])]
+    model_df, y, cfg = prepare_target(df, target)
 
     if len(model_df) < 10:
         return {
             "ok": False,
-            "message": "ML Lab needs at least 10 labeled compound rows. Upload more class data or use the app for cleaning/exploration first.",
+            "message": f"This model needs at least 10 labeled rows ({cfg['pos_name']} or {cfg['neg_name']}). Upload more class data first.",
         }
-
-    if model_df["BubbleYes"].nunique() < 2:
+    if y.nunique() < 2:
         return {
             "ok": False,
-            "message": "ML Lab needs both bubble=yes and bubble≠yes examples. The current data only has one class.",
+            "message": f"This model needs both {cfg['pos_name']} and {cfg['neg_name']} examples. The current data only has one class.",
         }
 
-    X = build_feature_matrix(model_df, use_phase=use_phase)
-    y = model_df["BubbleYes"].astype(int)
+    # The purity model can never use phase as a feature (it is the target).
+    feature_use_phase = bool(use_phase) and cfg["uses_phase_feature"]
+    X = build_feature_matrix(model_df, use_phase=feature_use_phase)
 
     stratify = y if y.value_counts().min() >= 2 else None
     test_size = 0.25 if len(model_df) >= 20 else 0.35
-
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=stratify
     )
 
-    # Random Forest — used for final predictions and feature importance.
+    # --- Random Forest ---
     rf = RandomForestClassifier(
-        n_estimators=150,
+        n_estimators=200,
         max_depth=7,
         min_samples_leaf=2,
         random_state=random_state,
@@ -1508,76 +1603,134 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         class_weight="balanced_subsample",
     )
     rf.fit(X_train, y_train)
-    rf_preds = rf.predict(X_test)
-    rf_accuracy = accuracy_score(y_test, rf_preds)
-    rf_precision = precision_score(y_test, rf_preds, zero_division=0)
-    rf_recall = recall_score(y_test, rf_preds, zero_division=0)
-    rf_f1 = f1_score(y_test, rf_preds, zero_division=0)
+    rf_scores = _score_model(rf, X_test, y_test)
 
-    importance = pd.DataFrame(
-        {"Feature": X.columns, "Importance": rf.feature_importances_}
-    ).sort_values("Importance", ascending=False)
-    importance = importance[importance["Importance"] > 0].head(12)
+    # --- Gradient Boosting (usually the strongest tabular model) ---
+    gb = HistGradientBoostingClassifier(
+        max_depth=4,
+        learning_rate=0.08,
+        max_iter=300,
+        l2_regularization=1.0,
+        random_state=random_state,
+    )
+    gb.fit(X_train, y_train)
+    gb_scores = _score_model(gb, X_test, y_test)
 
-    # Logistic Regression — simpler model used as a sanity check.
-    # StandardScaler is required because LR is sensitive to feature scale.
+    # --- Logistic Regression (scaled) — simple, honest baseline model ---
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
-
-    lr = LogisticRegression(
-        max_iter=1000,
-        random_state=random_state,
-        class_weight="balanced",
-    )
+    lr = LogisticRegression(max_iter=1000, random_state=random_state, class_weight="balanced")
     lr.fit(X_train_scaled, y_train)
-    lr_accuracy = accuracy_score(y_test, lr.predict(X_test_scaled))
+    lr_scores = _score_model(lr, X_test_scaled, y_test)
 
-    # Baseline: a naive model that always predicts the majority class.
+    # Pick the best TREE model for predictions (no scaling needed at predict time).
+    if gb_scores["balanced_accuracy"] >= rf_scores["balanced_accuracy"]:
+        best_model, best_name, best_scores = gb, "Gradient Boosting", gb_scores
+    else:
+        best_model, best_name, best_scores = rf, "Random Forest", rf_scores
+
+    # Permutation importance on the best model — fair across feature types.
+    perm = permutation_importance(
+        best_model, X_test, y_test, n_repeats=10, random_state=random_state, n_jobs=-1
+    )
+    importance = pd.DataFrame(
+        {"Feature": X.columns, "Importance": perm.importances_mean}
+    ).sort_values("Importance", ascending=False)
+    importance = importance[importance["Importance"] > 0].head(12)
+
+    # Naive baseline: always predict the majority class.
     majority_class = int(y_train.mode()[0])
-    baseline_preds = [majority_class] * len(y_test)
-    baseline_accuracy = accuracy_score(y_test, baseline_preds)
+    baseline_accuracy = float(accuracy_score(y_test, [majority_class] * len(y_test)))
 
-    # Class balance across the full labeled dataset.
-    yes_count = int((y == 1).sum())
-    no_count = int((y == 0).sum())
-    yes_rate = yes_count / len(y) if len(y) > 0 else 0.0
-
-    # Overfitting warning: RF >> LR on a small dataset is a red flag.
-    overfit_warning = None
-    if rf_accuracy - lr_accuracy > 0.15:
-        overfit_warning = (
-            f"Random Forest ({rf_accuracy:.0%}) is more than 15 points ahead of "
-            f"Logistic Regression ({lr_accuracy:.0%}). On a small dataset this often "
-            "means the RF memorized the training data. Treat feature importance and "
-            "predictions with extra caution."
-        )
-    elif rf_accuracy > 0.85 and len(model_df) < 100:
-        overfit_warning = (
-            f"RF accuracy is {rf_accuracy:.0%} with only {len(model_df)} labeled rows. "
-            "High accuracy on very small datasets is often a sign of overfitting. "
-            "The Logistic Regression result is likely more reliable here."
-        )
+    pos_count = int((y == 1).sum())
+    neg_count = int((y == 0).sum())
+    pos_rate = pos_count / len(y) if len(y) > 0 else 0.0
 
     return {
         "ok": True,
-        "model": rf,
+        "target": target,
+        "model": best_model,
+        "model_name": best_name,
         "scaler": scaler,
         "feature_columns": list(X.columns),
-        "rf_accuracy": float(rf_accuracy),
-        "rf_precision": float(rf_precision),
-        "rf_recall": float(rf_recall),
-        "rf_f1": float(rf_f1),
-        "lr_accuracy": float(lr_accuracy),
-        "baseline_accuracy": float(baseline_accuracy),
-        "yes_count": yes_count,
-        "no_count": no_count,
-        "yes_rate": float(yes_rate),
+        "feature_use_phase": feature_use_phase,
+        "rf": rf_scores,
+        "gb": gb_scores,
+        "lr": lr_scores,
+        "best": best_scores,
+        "baseline_accuracy": baseline_accuracy,
+        "pos_count": pos_count,
+        "neg_count": neg_count,
+        "pos_rate": float(pos_rate),
+        "pos_name": cfg["pos_name"],
+        "neg_name": cfg["neg_name"],
+        "outcome_name": cfg["outcome_name"],
         "training_rows": len(X_train),
         "testing_rows": len(X_test),
         "importance": importance,
-        "overfit_warning": overfit_warning,
     }
+
+
+# Backward-compatible alias: the bubble model is the original ML Lab behavior.
+def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int = 42) -> dict:
+    """Train the bubbling model. Kept for compatibility; see train_classification_model."""
+
+    return train_classification_model(df, target="bubble", use_phase=use_phase, random_state=random_state)
+
+
+@st.cache_data(show_spinner=False)
+def chi_squared_tests(df: pd.DataFrame, target: str = "bubble", min_per_category: int = 5) -> pd.DataFrame:
+    """
+    Chi-squared test of independence between categorical variables and the target.
+
+    For each categorical variable (A-site, B-site, etc.) this tests whether the
+    distribution of the outcome (e.g. bubble yes/no) depends on that variable.
+    A small p-value (< 0.05) means the variable and the outcome are associated —
+    a statistical complement to the ML feature-importance chart.
+
+    Categories with fewer than min_per_category rows are dropped so the test
+    assumptions stay reasonable.
+    """
+
+    if not SCIPY_AVAILABLE:
+        return pd.DataFrame()
+    if target not in TARGET_CONFIG:
+        return pd.DataFrame()
+
+    model_df, _y, cfg = prepare_target(df, target)
+    if len(model_df) < 10:
+        return pd.DataFrame()
+
+    label = model_df[cfg["label_col"]]
+    rows: List[dict] = []
+    for var in ["A", "B", "AP", "BP", "BDP"]:
+        if var not in model_df.columns:
+            continue
+        sub = pd.DataFrame({"var": model_df[var].replace("", np.nan), "label": label}).dropna()
+        if len(sub) < 10:
+            continue
+
+        table = pd.crosstab(sub["var"], sub["label"])
+        # Keep only categories with enough observations for a valid test.
+        table = table[table.sum(axis=1) >= min_per_category]
+        if table.shape[0] < 2 or table.shape[1] < 2:
+            continue
+
+        chi2, p_value, dof, _expected = chi2_contingency(table)
+        rows.append({
+            "Variable": CATEGORICAL_VARIABLE_NAMES.get(var, var),
+            "Categories tested": int(table.shape[0]),
+            "Rows used": int(table.values.sum()),
+            "Chi-squared": round(float(chi2), 2),
+            "p-value": float(p_value),
+            "Associated? (p<0.05)": "Yes" if p_value < 0.05 else "No",
+        })
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("p-value").reset_index(drop=True)
+    return out
 
 
 def make_single_prediction_row(
