@@ -286,11 +286,6 @@ def main() -> None:
         step=0.25,
         help="Lower values flag more possible outliers. Higher values only flag very extreme values.",
     )
-    use_phase_in_ml = st.sidebar.toggle(
-        "Use phase in ML model",
-        value=True,
-        help="Turn off if you want the model to ignore pure/impure phase labels.",
-    )
 
     st.sidebar.markdown("### 3. Quick help")
     st.sidebar.info(
@@ -650,7 +645,7 @@ def main() -> None:
         )
         target = "bubble" if target_label.startswith("Bubbling") else "purity"
 
-        ml_result = train_classification_model(described_df, target=target, use_phase=use_phase_in_ml)
+        ml_result = train_classification_model(described_df, target=target, use_phase=True)
 
         if not ml_result.get("ok"):
             st.warning(ml_result.get("message", "Model could not be trained."))
