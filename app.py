@@ -456,6 +456,11 @@ def main() -> None:
             st.dataframe(outlier_df, use_container_width=True, height=300)
 
     st.markdown("#### Cleaned compound table")
+    st.caption(
+        "Note: rows with **critical** errors above (missing/unknown element or a missing/invalid "
+        "required ratio) are automatically excluded from the charts and ML models. They still appear "
+        "in the validation report so you can fix them at the source. Rows with only minor issues are kept."
+    )
     if described_df.empty:
         st.warning("No compound rows found. Check whether the uploaded file uses recognizable column names like 1A, 1AN, 1B, 1BN, 1O, 1ON, 1P, and 1Bub.")
     else:
@@ -595,6 +600,10 @@ def main() -> None:
     st.write(
         "Each square in the heatmap compares two numeric features. Look at the BubbleYes row to see what may relate to bubbling."
     )
+    st.caption(
+        "The **BubbleYes** row uses the same yes-vs-no definition as the ML models "
+        "(“maybe” responses are excluded), so the map and the models stay consistent."
+    )
 
     corr = numeric_correlation_table(described_df)
 
@@ -683,57 +692,57 @@ def main() -> None:
                 st.metric(f"{pos_name} rate", f"{pos_rate:.0%}",
                           help=f"Fraction of labeled compounds that are {pos_name}.")
 
-            # --- Baseline comparison ---
+            # --- Baseline comparison (cross-validated) ---
+            cv_bal = best["cv_balanced_accuracy_mean"]
+            cv_bal_std = best["cv_balanced_accuracy_std"]
+            cv_auc = best["cv_roc_auc_mean"]
             majority_name = pos_name if pos_rate >= 0.5 else neg_name
             baseline_note = (
                 f"A naive model that **always guesses '{majority_name}'** scores **{baseline:.0%}** accuracy. "
-                f"The best model ({best_name}) scores **{best['accuracy']:.0%}** accuracy and "
-                f"**{best['balanced_accuracy']:.0%}** balanced accuracy."
+                f"Under 5-fold cross-validation, the best model ({best_name}) scores "
+                f"**{cv_bal:.0%} ± {cv_bal_std:.0%}** balanced accuracy and **{cv_auc:.2f}** ROC-AUC."
             )
             # Balanced accuracy is the honest score on imbalanced data: 50% = random.
-            if best["balanced_accuracy"] > 0.58:
+            if cv_bal > 0.58:
                 st.success(baseline_note + "  The model finds a real, usable signal.")
-            elif best["balanced_accuracy"] > 0.53:
+            elif cv_bal > 0.53:
                 st.info(baseline_note + "  The model finds a weak but real signal.")
             else:
                 st.warning(baseline_note + "  The model barely beats guessing — treat predictions with caution.")
 
-            # --- Three-model comparison ---
+            # --- Three-model comparison (cross-validated headline + single-split detail) ---
             st.markdown("#### Model comparison")
             st.caption(
-                "Three algorithms on the same train/test split. **Balanced accuracy** and **ROC-AUC** "
-                "are the fair scores when one class is more common (50% / 0.50 = random guessing)."
+                "**Balanced acc. (CV)** and **ROC-AUC (CV)** come from 5-fold cross-validation — the honest, "
+                "split-independent scores (± shows fold-to-fold spread; 50% / 0.50 = random guessing). "
+                "Precision, Recall, and F1 come from the held-out test split."
             )
-            comparison = pd.DataFrame(
-                [
-                    {"Model": "Random Forest", **ml_result["rf"]},
-                    {"Model": "Gradient Boosting", **ml_result["gb"]},
-                    {"Model": "Logistic Regression", **ml_result["lr"]},
-                ]
-            )
-            comparison = comparison.rename(columns={
-                "accuracy": "Accuracy",
-                "balanced_accuracy": "Balanced acc.",
-                "precision": "Precision",
-                "recall": "Recall",
-                "f1": "F1",
-                "roc_auc": "ROC-AUC",
-            })
-            show = comparison.copy()
-            for c in ["Accuracy", "Balanced acc.", "Precision", "Recall"]:
-                show[c] = (show[c] * 100).round(0).astype(int).astype(str) + "%"
-            show["F1"] = comparison["F1"].round(2)
-            show["ROC-AUC"] = comparison["ROC-AUC"].round(2)
-            st.dataframe(show, use_container_width=True, hide_index=True)
-            st.caption(f"Predictions below use the best model: **{best_name}**.")
+
+            def fmt_pct_pm(mean, std):
+                return f"{mean*100:.0f}% ± {std*100:.0f}%"
+
+            rows = []
+            for label, key in [("Random Forest", "rf"), ("Gradient Boosting", "gb"), ("Logistic Regression", "lr")]:
+                s = ml_result[key]
+                rows.append({
+                    "Model": label,
+                    "Balanced acc. (CV)": fmt_pct_pm(s["cv_balanced_accuracy_mean"], s["cv_balanced_accuracy_std"]),
+                    "ROC-AUC (CV)": f"{s['cv_roc_auc_mean']:.2f} ± {s['cv_roc_auc_std']:.2f}",
+                    "Precision": f"{s['precision']*100:.0f}%",
+                    "Recall": f"{s['recall']*100:.0f}%",
+                    "F1": round(s["f1"], 2),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.caption(f"Predictions below use the best model by cross-validated balanced accuracy: **{best_name}**.")
 
             with st.expander("What do these numbers mean?"):
                 st.markdown(
                     f"""
-                    - **Accuracy** — fraction correct overall. Misleading when one class dominates
-                      (the naive baseline here is {baseline:.0%}).
+                    - **Cross-validation (CV)** — the data is split into 5 parts; the model is trained on 4 and
+                      tested on the 1 left out, rotating through all 5. The **± spread** shows how much the score
+                      moves between splits. This is far more trustworthy than a single lucky/unlucky split.
                     - **Balanced accuracy** — average of how well it identifies each class. 50% = random.
-                      This is the honest headline number.
+                      This is the honest headline number (the naive baseline accuracy here is {baseline:.0%}).
                     - **Precision** — when the model predicts *{pos_name}*, how often it is right.
                     - **Recall** — of all the actual *{pos_name}* compounds, how many it caught.
                     - **ROC-AUC** — overall ranking quality. 0.50 = random, 1.00 = perfect.
@@ -776,6 +785,21 @@ def main() -> None:
             st.markdown(f"### Test a proposed compound — will it be {pos_name}?")
             st.write(f"Enter a compound. The model estimates the chance of **{pos_name}** based on past data.")
 
+            # Reliability is driven by the cross-validated ROC-AUC of the model
+            # used for prediction. A weak model should not show a confident number.
+            reliable = cv_auc >= 0.65
+            if reliable:
+                st.caption(
+                    f"This outcome is **moderately predictable** (CV ROC-AUC {cv_auc:.2f}). "
+                    "The estimate is a useful hint, not a guarantee."
+                )
+            else:
+                st.warning(
+                    f"⚠️ {pos_name.capitalize()} is **only weakly predictable** from composition "
+                    f"(CV ROC-AUC {cv_auc:.2f}, close to random). Treat the number below as a rough lean, "
+                    "not a real probability — the model cannot reliably tell individual compounds apart."
+                )
+
             uses_phase_input = ml_result["feature_use_phase"]
             p1, p2, p3 = st.columns(3)
             with p1:
@@ -816,8 +840,22 @@ def main() -> None:
                 )
                 probability = ml_result["model"].predict_proba(pred_features)[0][1]
                 formula = pred_row.iloc[0]["Formula"]
-                st.success(f"Predicted **{pos_name}** probability for **{formula}**: **{probability:.1%}**")
-                st.caption(f"Estimated by the {best_name} model.")
+
+                # Round to the nearest 5% — a weak model does not justify 1% precision.
+                rounded = round(probability * 20) / 20
+                if probability >= 0.6:
+                    verdict = f"leans toward **{pos_name}**"
+                elif probability <= 0.4:
+                    verdict = f"leans toward **{neg_name}**"
+                else:
+                    verdict = "is a **toss-up** — the model cannot confidently call it either way"
+
+                message = f"**{formula}** {verdict}.  Estimated {pos_name} chance: **{rounded:.0%}**."
+                if reliable:
+                    st.success(message)
+                else:
+                    st.info(message + "  (Low-confidence — see the warning above.)")
+                st.caption(f"Estimated by the {best_name} model (cross-validated ROC-AUC {cv_auc:.2f}).")
                 st.dataframe(
                     pred_row[[c for c in ordered_columns(pred_row) if c in pred_row.columns]],
                     use_container_width=True,

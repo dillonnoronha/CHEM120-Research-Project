@@ -2,14 +2,18 @@
 
 ## Best order to use the app
 
-1. Upload `Combined_Data.xlsx`.
-2. Open **Start Here** and confirm compounds loaded.
-3. Open **Check Data** and review any issues.
-4. Open **Explore Results** to compare A-site and B-site elements.
-5. Open **Relationship Map** to look at numeric relationships.
-6. Open **ML Lab** to test possible compounds as hypotheses.
-7. Use **Add Compound** to create a new cleaned entry.
-8. Use **Export** to save cleaned files.
+The app loads `Combined_Data.xlsx` automatically (or upload your own file in the sidebar). Then just scroll down the page:
+
+1. **Check Data** — confirm compounds loaded and review any issues.
+2. **Explore Results** — compare A-site and B-site elements.
+3. **Relationship Map** — look at numeric relationships.
+
+Then use the tabs at the bottom:
+
+4. **ML Lab** — train models and test possible compounds as hypotheses.
+5. **Add Compound** — create a new cleaned entry.
+6. **Export** — save cleaned files.
+7. **New Semester** — merge a new semester's file into the dataset.
 
 ## What is bubble response?
 
@@ -18,7 +22,7 @@ Bubble response is the lab observation of whether bubbles were seen:
 - `no`
 - `maybe`
 
-The ML Lab predicts whether the result may be `bubble = yes`.
+The ML Lab can predict two things: whether a compound **bubbles** (yes vs no) and whether it is **pure** (pure vs impure). Pick which one with the toggle at the top of ML Lab. Treat the results as hypotheses, not guarantees — the app shows how reliable each model is.
 
 ## What is the heatmap?
 

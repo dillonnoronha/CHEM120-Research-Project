@@ -49,7 +49,8 @@ try:
         roc_auc_score,
     )
     from sklearn.inspection import permutation_importance
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
+    from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
     SKLEARN_AVAILABLE = True
@@ -937,6 +938,10 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
     df["PhaseN"] = df["P"].map(PHASE_MAP)
     df["BubN"] = df["Bub"].map(BUBBLE_MAP)
     df["BubbleYes"] = (df["Bub"] == "yes").astype(int)
+    # Yes-vs-no version used by the correlation map so it matches the ML models,
+    # which drop "maybe". NaN here means the row is excluded pairwise from the
+    # BubbleYes correlations only (other feature pairs keep every row).
+    df["BubbleYesNo"] = df["Bub"].map({"yes": 1.0, "no": 0.0})
 
     # Reconstruct formula after cleaning.
     df["Formula"] = df.apply(reconstruct_formula, axis=1)
@@ -1399,8 +1404,11 @@ def plot_distribution(
 def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
     """Create a correlation matrix from the numeric columns used in the app."""
 
+    # BubbleYesNo (yes vs no, "maybe" = NaN) is used instead of BubbleYes so the
+    # map matches the ML models, which also drop "maybe". It is relabeled to
+    # "BubbleYes" below so the chart stays readable.
     candidates = [
-        "BubbleYes", "BubN", "PhaseN",
+        "BubbleYesNo", "PhaseN",
         "AN", "APN", "BN", "BPN", "BDPN", "ON",
         "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
         "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
@@ -1415,7 +1423,8 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
     if numeric.shape[1] < 2:
         return pd.DataFrame()
 
-    return numeric.corr(numeric_only=True)
+    corr = numeric.corr(numeric_only=True)
+    return corr.rename(index={"BubbleYesNo": "BubbleYes"}, columns={"BubbleYesNo": "BubbleYes"})
 
 
 def plot_heatmap(corr: pd.DataFrame):
@@ -1594,6 +1603,41 @@ def _score_model(model, X_eval, y_eval) -> dict:
     }
 
 
+def _cross_val_scores(estimator, X, y, random_state: int, n_splits: int = 5) -> dict:
+    """
+    Run stratified k-fold cross-validation and return mean ± std of the key
+    scores. CV is far more honest than a single split: it trains and tests on
+    every part of the data, so a lucky/unlucky split cannot flatter the result.
+
+    The number of folds is reduced automatically if the rarer class is small.
+    """
+
+    min_class = int(y.value_counts().min())
+    folds = max(2, min(n_splits, min_class))
+    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    try:
+        res = cross_validate(
+            estimator, X, y, cv=skf,
+            scoring=["balanced_accuracy", "roc_auc"],
+            n_jobs=-1,
+        )
+        return {
+            "cv_balanced_accuracy_mean": float(res["test_balanced_accuracy"].mean()),
+            "cv_balanced_accuracy_std": float(res["test_balanced_accuracy"].std()),
+            "cv_roc_auc_mean": float(res["test_roc_auc"].mean()),
+            "cv_roc_auc_std": float(res["test_roc_auc"].std()),
+            "cv_folds": folds,
+        }
+    except Exception:
+        return {
+            "cv_balanced_accuracy_mean": float("nan"),
+            "cv_balanced_accuracy_std": float("nan"),
+            "cv_roc_auc_mean": float("nan"),
+            "cv_roc_auc_std": float("nan"),
+            "cv_folds": folds,
+        }
+
+
 @st.cache_data(show_spinner=False)
 def train_classification_model(
     df: pd.DataFrame,
@@ -1645,39 +1689,46 @@ def train_classification_model(
         X, y, test_size=test_size, random_state=random_state, stratify=stratify
     )
 
-    # --- Random Forest ---
-    rf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=7,
-        min_samples_leaf=2,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight="balanced_subsample",
-    )
-    rf.fit(X_train, y_train)
+    # Hyperparameters are defined once so the single-split fit and the
+    # cross-validation use identical models.
+    def make_rf():
+        return RandomForestClassifier(
+            n_estimators=200, max_depth=7, min_samples_leaf=2,
+            random_state=random_state, n_jobs=-1, class_weight="balanced_subsample",
+        )
+
+    def make_gb():
+        return HistGradientBoostingClassifier(
+            max_depth=4, learning_rate=0.08, max_iter=300,
+            l2_regularization=1.0, random_state=random_state,
+        )
+
+    def make_lr():
+        # Scaling lives inside the pipeline so cross-validation has no leakage.
+        return Pipeline([
+            ("scaler", StandardScaler()),
+            ("lr", LogisticRegression(max_iter=1000, random_state=random_state, class_weight="balanced")),
+        ])
+
+    # --- Single-split fit (for precision/recall/F1 and the final predictor) ---
+    rf = make_rf(); rf.fit(X_train, y_train)
     rf_scores = _score_model(rf, X_test, y_test)
+    rf_scores.update(_cross_val_scores(make_rf(), X, y, random_state))
 
-    # --- Gradient Boosting (usually the strongest tabular model) ---
-    gb = HistGradientBoostingClassifier(
-        max_depth=4,
-        learning_rate=0.08,
-        max_iter=300,
-        l2_regularization=1.0,
-        random_state=random_state,
-    )
-    gb.fit(X_train, y_train)
+    gb = make_gb(); gb.fit(X_train, y_train)
     gb_scores = _score_model(gb, X_test, y_test)
+    gb_scores.update(_cross_val_scores(make_gb(), X, y, random_state))
 
-    # --- Logistic Regression (scaled) — simple, honest baseline model ---
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    lr = LogisticRegression(max_iter=1000, random_state=random_state, class_weight="balanced")
-    lr.fit(X_train_scaled, y_train)
-    lr_scores = _score_model(lr, X_test_scaled, y_test)
+    # Logistic Regression — simple, honest baseline. Scaled via the pipeline.
+    lr = make_lr(); lr.fit(X_train, y_train)
+    lr_scores = _score_model(lr, X_test, y_test)
+    lr_scores.update(_cross_val_scores(make_lr(), X, y, random_state))
 
-    # Pick the best TREE model for predictions (no scaling needed at predict time).
-    if gb_scores["balanced_accuracy"] >= rf_scores["balanced_accuracy"]:
+    scaler = lr.named_steps["scaler"]  # kept for compatibility with callers
+
+    # Pick the best TREE model for predictions, by CROSS-VALIDATED balanced
+    # accuracy (more robust than a single split).
+    if gb_scores["cv_balanced_accuracy_mean"] >= rf_scores["cv_balanced_accuracy_mean"]:
         best_model, best_name, best_scores = gb, "Gradient Boosting", gb_scores
     else:
         best_model, best_name, best_scores = rf, "Random Forest", rf_scores

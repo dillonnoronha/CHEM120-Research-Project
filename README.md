@@ -27,10 +27,22 @@ Upload `Combined_Data.xlsx` or any CHEM 120 survey export.
 
 ## Layout
 
-The page scrolls through three sections — **Check Data → Explore Results → Relationship Map** — then three tabs at the bottom: **ML Lab | Add Compound | Export**.
+The page scrolls through three sections — **Check Data → Explore Results → Relationship Map** — then four tabs at the bottom: **ML Lab | Add Compound | Export | New Semester**.
+
+## ML Lab
+
+- Predicts two outcomes: **bubbling** (yes vs no) and **purity** (pure vs impure). Pick the target with the toggle.
+- Trains three models — **Random Forest, Gradient Boosting, Logistic Regression** — and reports **5-fold cross-validated** balanced accuracy and ROC-AUC (with ± spread), so scores are not at the mercy of one lucky split.
+- Includes a **chi-squared test of independence** (is an element position statistically associated with the outcome?) and **permutation importance** (which features matter, without the mass bias of default tree importance).
+- The single-compound predictor adapts its confidence to the model's cross-validated ROC-AUC — weak outcomes are shown as a rough lean, not a precise probability.
 
 ## Notes
 
 - Original uploaded file is never overwritten. Use Export to save cleaned data.
+- Rows with **critical** data-entry errors (missing/unknown element, missing/invalid required ratio) are automatically excluded from charts and ML. They still appear in the validation report.
 - If the app shows a column-mapping warning after a Google Form change, see `DEVELOPER_NOTES.md → When the Google Form changes`.
-- ML Lab runs both Random Forest and Logistic Regression. If RF accuracy is much higher than LR on a small dataset, treat the results with caution.
+- Use the **New Semester** tab to merge a new raw export into the existing dataset.
+
+## Deploy
+
+Push to GitHub, then deploy on [Streamlit Community Cloud](https://share.streamlit.io): point it at `app.py` on the `main` branch. Make sure `data/Combined_Data.xlsx` is committed so the app has data on startup.

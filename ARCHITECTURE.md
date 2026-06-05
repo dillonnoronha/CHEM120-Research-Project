@@ -2,110 +2,109 @@
 
 ## Overview
 
-Catalyst Insight Studio is a Streamlit web application that transforms student chemistry lab data into clean compound records, visual trend analysis, and machine-learning-based hypotheses. The app separates UI concerns (Streamlit widgets and layout) from data processing, ensuring portability and testability.
+Catalyst Insight Studio is a Streamlit web application that turns student chemistry lab data into clean compound records, visual trend analysis, and machine-learning-based hypotheses. The app separates UI concerns (Streamlit widgets and layout) from data processing, which keeps it portable and testable.
 
 ## File Organization
 
-**`app.py`** (918 lines) — Streamlit user interface  
-- Page layout, CSS theming, widget callbacks
-- Imports ~50 functions from `pipeline.py`
-- No data processing logic lives here
+**`app.py`** (~1120 lines) — Streamlit user interface
+- Page layout, CSS theming, widgets, tabs, forms
+- Imports its functions from `pipeline.py`
+- No data-processing logic lives here
 
-**`pipeline.py`** (1551 lines) — All data, ML, and plotting logic  
-- No Streamlit UI code inside function bodies
-- Uses `@st.cache_data` decorators to speed up expensive operations
-- Organized into 11 sections (reference tables, data loading, cleaning, validation, descriptors, ML, visualization, export)
+**`pipeline.py`** (~1900 lines) — All data, ML, statistics, plotting, and export logic
+- No Streamlit UI code inside function bodies (only `@st.cache_data` decorators)
+- Organized into 11 numbered sections
 
 ## Data Flow
 
 ```
-User uploads CSV/Excel
+User uploads CSV/Excel  (or app auto-loads data/Combined_Data.xlsx)
        ↓
 read_table_from_bytes()
        ↓
-normalize_to_long_format() [wide → long]
+normalize_to_long_format()   [wide 1A/1AN/… → long; also detects already-long files]
        ↓
-clean_and_encode_data() [symbols, labels, formula]
+clean_and_encode_data()      [symbols, labels, formula, BubbleYes / BubbleYesNo]
        ↓
-add_chemical_descriptors() [atomic mass, Z, formula weight]
+add_chemical_descriptors()   [atomic mass, Z, formula weight, ratios, mixed-site flags]
        ↓
-validate_compound_rows() [error checking]
-detect_numeric_outliers() [statistical flags]
+split_quarantine()           [drop rows with CRITICAL errors from analysis]
        ↓
-[Explore: plots, summaries, correlations]
-[Hypothesize: train ML model, predict bubble=yes]
+validate_compound_rows()     [error report, tagged Critical / Minor]
+detect_numeric_outliers()    [z-score flags]
        ↓
-Export: CSV or Excel download
+[Explore: distributions, element trends, correlation heatmap]
+[Relationship Map: numeric correlations, strongest links to bubbling]
+[ML Lab: train models for bubbling AND purity, chi-squared, permutation importance, predict]
+       ↓
+Export: CSV / Excel download   ·   New Semester: merge a new file into the dataset
 ```
 
 ## Page Layout (`app.py`)
 
-1. **Sidebar:** File upload widgets, outlier sensitivity slider, phase/ML toggles
-2. **Hero section:** Title and workflow steps  
-3. **Status strip:** Data source, row counts, validation summary
-4. **Check Data tab:** Validation issues, outliers, cleaned compound table
-5. **Explore Results tab:** Distribution charts, element trends, correlation heatmap
-6. **ML Lab tab:** Model accuracy, feature importance, single-compound predictions
-7. **Add Compound tab:** Form to manually enter and validate one compound
-8. **Export tab:** Download cleaned data, reports, outlier flags
+The primary content **scrolls** through three sections, then four action **tabs** sit at the bottom.
+
+1. **Sidebar:** file upload, outlier-sensitivity slider, quick-help
+2. **Hero header:** title and workflow steps
+3. **Health cards:** loaded compounds, validation summary, bubble outcomes
+4. **Check Data** (scroll): validation issues (Critical/Minor), outliers, cleaned compound table
+5. **Explore Results** (scroll): bubble/phase distributions, A-site & B-site trends, filters
+6. **Relationship Map** (scroll): correlation heatmap + strongest links to bubbling
+7. **Tabs:** **ML Lab** · **Add Compound** · **Export** · **New Semester**
 
 Session state tracks manually added compounds in `st.session_state.manual_entries`.
 
-## Core Modules in `pipeline.py`
+## Core Sections in `pipeline.py`
 
 | Section | Purpose |
 |---------|---------|
-| **App Config** | Constants: APP_TITLE, COMPOUND_SLOTS, PHASE_MAP, BUBBLE_MAP, FRONT_COLUMNS |
-| **Utilities** | Text cleaning, label normalization, numeric parsing (safe_float, clean_symbol) |
-| **Reference Tables** | Load AtomicMass.csv and optional PaulingEN.csv; build element lookup maps |
-| **Data Loading** | Read CSV/Excel files; find default database or generate demo dataset |
-| **Column Mapping** | `infer_slot_column()` fuzzy-matches student survey columns (1A, 1AN, 2B, etc.) to standard names |
-| **Cleaning & Encoding** | Standardize element symbols, reconstruct chemical formulas, encode phase/bubble labels numerically |
-| **Validation** | Check for missing fields, invalid elements, incorrect labels, non-numeric ratios |
-| **Descriptors** | Compute weighted-average atomic numbers/masses per site, formula mass, cation/oxygen ratios, mixed-site flags |
-| **Summary & Plotting** | Aggregate by element, create bar/distribution/heatmap charts, compute correlations |
-| **ML Helpers** | Select features, build one-hot-encoded matrix, train Random Forest and Logistic Regression |
-| **Export** | Convert DataFrames to CSV or Excel bytes for download |
+| **1. App Config** | Constants: APP_TITLE, COMPOUND_SLOTS, PHASE_MAP, BUBBLE_MAP, TARGET_CONFIG, FRONT_COLUMNS |
+| **2. Utilities** | Text cleaning, label normalization, numeric parsing |
+| **3. Reference Tables** | Load AtomicMass.csv (and optional electronegativity table); build element lookup maps |
+| **4. Data Loading** | Read CSV/Excel; find default database or generate demo dataset |
+| **5. Column Mapping** | `normalize_to_long_format()` handles both wide (1A, 1AN…) and already-long files; `infer_slot_column()` fuzzy-matches survey columns |
+| **6. Cleaning & Encoding** | Standardize symbols, reconstruct formulas, encode phase/bubble labels |
+| **7. Validation & Outliers** | `classify_row_issues()` (severity-tagged), `validate_compound_rows()`, `split_quarantine()`, `detect_numeric_outliers()` |
+| **8. Descriptors** | Weighted-average atomic number/mass per site, formula mass, structural ratios, mixed-site flags |
+| **9. Summary & Plotting** | Aggregate by element, bar/distribution/heatmap charts, correlation table |
+| **10. ML Helpers** | Features, one-hot matrix, `train_classification_model()`, `chi_squared_tests()`, single-row prediction |
+| **11. Export** | DataFrames → CSV / Excel bytes |
 
 ## Key Data Structures
 
-**Wide → Long** (normalize_to_long_format)
-- Input: One row per student group, 4 potential compounds per group (columns 1A, 1AN, 1B, …, 4Bub)
-- Output: One row per compound, with metadata and formula fields
+**Wide → Long** (`normalize_to_long_format`)
+- Wide input: one row per group, up to 4 compounds (1A…4Bub). Long input (one row per compound) is detected automatically and passed through.
+- Output: one row per compound with metadata and formula fields.
 
-**Formula Fields** (after cleaning)
-- A, AN, AP, APN (A-site element and ratio; optional A′)
-- B, BN, BP, BPN, BDP, BDPN (B-site element, ratio; up to three B variants)
-- O, ON (oxygen element and ratio, always "O")
-- P, Bub (phase and bubble response, encoded as PhaseN/BubN)
+**Formula fields** (after cleaning): A/AN (+ optional AP/APN), B/BN (+ optional BP/BPN, BDP/BDPN), O/ON, P, Bub.
 
-**Descriptors** (computed per compound)
-- A_avg_Z, B_avg_Z (weighted atomic numbers by site)
-- FormulaMass (sum of element masses × stoichiometry)
-- O_to_cation_ratio, B_to_A_ratio (structural ratios)
-- Mixed_A_site, Mixed_B_site (binary flags)
+**Outcome columns:** `BubbleYes` (yes vs everything, used for element-rate charts), `BubbleYesNo` (yes vs no, "maybe" = NaN — used by the correlation map so it matches the ML), `PhaseN`, `BubN`.
 
-## ML Training (`train_ml_model`)
+**Descriptors:** A_avg_Z, B_avg_Z, A_avg_mass, B_avg_mass, FormulaMass, O_to_cation_ratio, B_to_A_ratio, Mixed_A_site, Mixed_B_site.
 
-Predicts bubble=yes probability using two models:
-- **Random Forest** (150 trees, max_depth=7) — final predictor, provides feature importance
-- **Logistic Regression** — sanity check for overfitting; compared side-by-side
+## ML Training (`train_classification_model`)
 
-Both share the same 75/25 train/test split. Features include ratios, atomic properties, and one-hot-encoded element symbols.
+Predicts one of two targets, set by `TARGET_CONFIG`:
+- **bubble** — bubble = yes vs no ("maybe" dropped)
+- **purity** — pure vs impure ("not made" dropped; phase can never be a feature here)
+
+For the chosen target it:
+1. Builds the two-class dataset (`prepare_target`) and one-hot feature matrix.
+2. Trains **Random Forest**, **Gradient Boosting** (`HistGradientBoostingClassifier`), and **Logistic Regression** (scaled, in a `Pipeline`).
+3. Reports **5-fold stratified cross-validated** balanced accuracy and ROC-AUC (mean ± std) for each, plus single-split precision/recall/F1.
+4. Picks the best tree model (RF vs GB) by **cross-validated balanced accuracy** as the predictor.
+5. Computes **permutation importance** (fair across categorical/numeric features) on the best model.
+
+`chi_squared_tests()` complements the ML with a statistical test of whether each element position is associated with the outcome (returns p-values).
 
 ## Caching Strategy
 
-Heavy operations are cached with `@st.cache_data`:
-- File reading and table loading
-- Formula normalization
-- Data cleaning and descriptor computation
-- ML model training
-
-This keeps the UI responsive when students click between tabs.
+Heavy operations use `@st.cache_data`: file reading, normalization, cleaning, descriptors, validation, quarantine, outliers, model training, chi-squared, and export conversion. This keeps the UI responsive as students scroll and switch tabs.
 
 ## Future Extensions
 
-- Add new descriptors in `add_chemical_descriptors()` (ionic radius, tolerance factor, electronegativity difference)
-- Add new validation rules in `validate_compound_rows()`
-- Adjust ML features in `feature_columns()` or change models in `train_ml_model()`
-- Update survey column aliases in `infer_slot_column()` if Google Form questions change
+- Add descriptors in `add_chemical_descriptors()` (ionic radius, tolerance factor, electronegativity difference)
+- Add validation rules in `classify_row_issues()` (set each new issue's severity)
+- Add or retune models / features in `train_classification_model()` and `feature_columns()`
+- Add a new prediction target by extending `TARGET_CONFIG`
+- Update survey column aliases in `infer_slot_column()` (and the long-format aliases in `normalize_to_long_format()`) if the Google Form changes

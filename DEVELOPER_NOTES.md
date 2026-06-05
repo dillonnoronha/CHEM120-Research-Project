@@ -32,8 +32,10 @@ The app is organized into clear sections:
    - `reconstruct_formula()` rebuilds formulas such as `La2NiO4`.
 
 8. **Validation and outlier detection**
-   - `validate_compound_rows()` checks for missing/invalid entries.
-   - `detect_numeric_outliers()` flags unusual numeric values.
+   - `classify_row_issues()` returns each row's issues tagged **Critical** or **Minor**.
+   - `validate_compound_rows()` builds the full issue report from those.
+   - `split_quarantine()` drops rows with critical errors so they never reach charts/ML.
+   - `detect_numeric_outliers()` flags unusual numeric values via z-scores.
 
 9. **Chemical descriptors**
    - `add_chemical_descriptors()` calculates atomic number, atomic mass, formula mass, oxygen-to-cation ratio, B-to-A ratio, and mixed-site flags.
@@ -43,9 +45,12 @@ The app is organized into clear sections:
    - Chart functions are separate from the UI so they are easier to replace or improve.
 
 11. **Machine learning helpers**
-   - `train_ml_model()` trains the Random Forest model.
-   - `feature_columns()` controls which features the model uses.
+   - `train_classification_model(df, target=...)` trains Random Forest, Gradient Boosting, and Logistic Regression for one target (`"bubble"` or `"purity"`), reports 5-fold cross-validated scores, and returns the best tree model plus permutation importance.
+   - `TARGET_CONFIG` defines the prediction targets (label column, positive/negative class, whether phase may be a feature). Add a new target here.
+   - `chi_squared_tests(df, target=...)` runs the chi-squared test of independence for each element position.
+   - `feature_columns()` controls which features the models use.
    - `build_feature_matrix()` prepares one-hot encoded features.
+   - `train_ml_model()` is a thin backward-compatible alias for the bubble model.
 
 12. **Streamlit interface**
    - The bottom of `app.py` creates the sidebar, tabs, forms, charts, and downloads.
@@ -86,8 +91,8 @@ If the department changes the Google Form wording, column names in the exported 
 **Step 1 — Get the new column names.**
 Download a fresh export from the form (or look at the header row of the uploaded file listed in the warning).
 
-**Step 2 — Open `infer_slot_column()` in `app.py`.**
-Find the `field_aliases` dictionary near the top of the function. Each key is an internal field name; its value is a list of accepted lowercase column-name fragments.
+**Step 2 — Open `infer_slot_column()` in `pipeline.py`.**
+Find the `field_aliases` dictionary near the top of the function. Each key is an internal field name; its value is a list of accepted lowercase column-name fragments. (If the new export is already one-row-per-compound rather than wide, update the matching `_field_aliases` dict inside `normalize_to_long_format()` instead.)
 
 ```python
 field_aliases = {
@@ -151,7 +156,7 @@ This reduces reload time when students switch tabs or adjust filters.
 
 ## Phase graph fix
 
-The phase graph is controlled by these functions in `app.py`:
+The phase graph is controlled by these functions in `pipeline.py`:
 
 ```python
 normalize_phase_label()
