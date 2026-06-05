@@ -43,6 +43,7 @@ from pipeline import (
     plot_heatmap,
     read_local_table,
     read_table_from_bytes,
+    split_quarantine,
     summarize_by_element,
     train_classification_model,
     validate_compound_rows,
@@ -369,7 +370,14 @@ def main() -> None:
     if not st.session_state.manual_entries.empty:
         described_df = pd.concat([described_df, st.session_state.manual_entries], ignore_index=True)
 
+    # Validate against all rows first so the report reflects the full upload.
     issues_df = validate_compound_rows(described_df, atomic)
+
+    # Exclude structurally broken rows (missing/unknown element, missing or
+    # invalid required ratio) from analysis. These are invalid data, not a
+    # judgment call, so they never enter the charts or ML.
+    described_df, _excluded_df = split_quarantine(described_df, atomic)
+
     outlier_df = detect_numeric_outliers(described_df, z_threshold=z_threshold)
     yes_count = int(described_df["BubbleYes"].sum()) if "BubbleYes" in described_df.columns else 0
 
@@ -432,7 +440,12 @@ def main() -> None:
         if issues_df.empty:
             st.success("No validation issues found.")
         else:
-            st.warning(f"{len(issues_df):,} possible issues found. Review these before final analysis.")
+            n_critical = int((issues_df["Severity"] == "Critical").sum()) if "Severity" in issues_df.columns else 0
+            n_minor = len(issues_df) - n_critical
+            st.warning(
+                f"{len(issues_df):,} issues found — **{n_critical:,} critical**, {n_minor:,} minor. "
+                "Critical issues mean a row's data is broken; minor issues are cosmetic."
+            )
             st.dataframe(issues_df, use_container_width=True, height=300)
     with check_cols[1]:
         st.markdown("#### Possible numeric outliers")

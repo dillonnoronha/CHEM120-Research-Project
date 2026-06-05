@@ -955,88 +955,140 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
 # Data quality is a major part of this project because students may accidentally
 # enter full names, missing ratios, invalid labels, or blank values.
 
+# Issue severity levels.
+#   CRITICAL — the row is structurally broken (bad element or required ratio).
+#              These rows cannot be trusted for descriptors, charts, or ML, and
+#              are the ones a careful instructor would normally delete by hand.
+#   MINOR    — worth a glance but harmless (oxygen auto-corrected, optional-field
+#              quirks, label wording the ML already filters out on its own).
+CRITICAL = "Critical"
+MINOR = "Minor"
+
+
+def classify_row_issues(row: pd.Series, valid_symbols: set) -> List[Tuple[str, str, str, str]]:
+    """
+    Return the list of (field, issue, suggestion, severity) for a single row.
+
+    Shared by validate_compound_rows() (for display) and split_quarantine()
+    (for auto-exclusion) so the two never drift apart.
+    """
+
+    found: List[Tuple[str, str, str, str]] = []
+
+    # Required element fields — a missing A or B site breaks the whole formula.
+    if is_blank(row.get("A")):
+        found.append(("A", "Missing A-site element.", "Enter an element symbol like La, Sr, or Ca.", CRITICAL))
+    if is_blank(row.get("B")):
+        found.append(("B", "Missing B-site element.", "Enter an element symbol like Ni, Fe, Co, Mn, or Zn.", CRITICAL))
+
+    # Oxygen must be O — but the pipeline already assumes O, so this is cosmetic.
+    if clean_text(row.get("O")) != "O":
+        found.append(("O", "Oxygen field is not O.", "Enter the symbol O, not the word oxygen.", MINOR))
+
+    # Element symbols must exist in the periodic table — unknown symbols make
+    # atomic-number/mass descriptors impossible, so they are critical.
+    for field in ["A", "AP", "B", "BP", "BDP", "O"]:
+        symbol = clean_text(row.get(field, ""))
+        if symbol and symbol not in valid_symbols:
+            found.append((field, f"Unknown element symbol '{symbol}'.", "Use a valid periodic-table symbol.", CRITICAL))
+
+    # Required numeric ratios — missing or non-positive values break the formula.
+    for field in ["AN", "BN", "ON"]:
+        value = safe_float(row.get(field))
+        if np.isnan(value):
+            found.append((field, "Missing or non-numeric ratio.", "Use numbers only, such as 1, 2, 3, or 0.5.", CRITICAL))
+        elif value <= 0:
+            found.append((field, "Ratio must be greater than zero.", "Use a positive number.", CRITICAL))
+
+    # Optional element/ratio mismatches — harmless for analysis, just flagged.
+    for symbol_field, ratio_field in [("AP", "APN"), ("BP", "BPN"), ("BDP", "BDPN")]:
+        symbol = clean_text(row.get(symbol_field, ""))
+        ratio = safe_float(row.get(ratio_field))
+        if symbol and not np.isnan(ratio) and ratio <= 0:
+            found.append((ratio_field, "Optional element ratio is zero or negative.", "Use a positive ratio or leave both optional fields blank.", MINOR))
+        if not symbol and not np.isnan(ratio) and ratio > 0:
+            found.append((symbol_field, f"{ratio_field} has a number but {symbol_field} is blank.", "Enter the optional element symbol or clear the ratio.", MINOR))
+
+    # Phase / bubble labels. "other/needs review" means the app could not
+    # interpret the entry. These are MINOR because the ML target-prep already
+    # filters non-yes/no and non-pure/impure rows out of each model on its own.
+    phase_label = clean_label(row.get("P"))
+    bubble_label = clean_label(row.get("Bub"))
+    if phase_label == "other/needs review" or phase_label not in PHASE_MAP:
+        raw_phase = clean_text(row.get("P_raw", row.get("P", "")))
+        found.append(("P", f"Unrecognized phase label: '{raw_phase}'.", "Use pure, impure, or a recognized not-made/failed-compound wording.", MINOR))
+    if bubble_label == "other/needs review" or bubble_label not in BUBBLE_MAP:
+        raw_bubble = clean_text(row.get("Bub_raw", row.get("Bub", "")))
+        found.append(("Bub", f"Unrecognized bubble response: '{raw_bubble}'.", "Use exactly: yes, no, or maybe.", MINOR))
+
+    return found
+
+
 @st.cache_data(show_spinner=False)
 def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.DataFrame:
     """
     Check cleaned rows against the CHEM 120 data-entry rules.
 
-    Future update point:
-    Add new validation checks inside this function if the lab template changes.
+    Each issue is tagged with a Severity (Critical or Minor). See
+    classify_row_issues() to add or change checks.
     """
 
     if clean_df.empty:
-        return pd.DataFrame(columns=["Row", "GroupNumber", "Slot", "Formula", "Field", "Issue", "Suggestion"])
+        return pd.DataFrame(columns=["Row", "GroupNumber", "Slot", "Formula", "Field", "Issue", "Suggestion", "Severity"])
 
     _name_to_symbol, valid_symbols = make_element_maps(atomic)
     issues: List[dict] = []
 
-    def add_issue(row: pd.Series, field: str, issue: str, suggestion: str) -> None:
-        issues.append(
-            {
-                "Row": row.get("SourceRow", ""),
-                "GroupNumber": row.get("GroupNumber", ""),
-                "Slot": row.get("Slot", ""),
-                "Formula": row.get("Formula", ""),
-                "Field": field,
-                "Issue": issue,
-                "Suggestion": suggestion,
-            }
-        )
-
     for _, row in clean_df.iterrows():
-        # Required element fields.
-        if is_blank(row.get("A")):
-            add_issue(row, "A", "Missing A-site element.", "Enter an element symbol like La, Sr, or Ca.")
-        if is_blank(row.get("B")):
-            add_issue(row, "B", "Missing B-site element.", "Enter an element symbol like Ni, Fe, Co, Mn, or Zn.")
-
-        # Oxygen must be O.
-        if clean_text(row.get("O")) != "O":
-            add_issue(row, "O", "Oxygen field is not O.", "Enter the symbol O, not the word oxygen.")
-
-        # Check element symbols against the atomic table.
-        for field in ["A", "AP", "B", "BP", "BDP", "O"]:
-            symbol = clean_text(row.get(field, ""))
-            if symbol and symbol not in valid_symbols:
-                add_issue(row, field, f"Unknown element symbol '{symbol}'.", "Use a valid periodic-table symbol.")
-
-        # Required numeric ratios.
-        for field in ["AN", "BN", "ON"]:
-            value = safe_float(row.get(field))
-            if np.isnan(value):
-                add_issue(row, field, "Missing or non-numeric ratio.", "Use numbers only, such as 1, 2, 3, or 0.5.")
-            elif value <= 0:
-                add_issue(row, field, "Ratio must be greater than zero.", "Use a positive number.")
-
-        # Optional ratio without optional element.
-        for symbol_field, ratio_field in [("AP", "APN"), ("BP", "BPN"), ("BDP", "BDPN")]:
-            symbol = clean_text(row.get(symbol_field, ""))
-            ratio = safe_float(row.get(ratio_field))
-            if symbol and not np.isnan(ratio) and ratio <= 0:
-                add_issue(row, ratio_field, "Optional element ratio is zero or negative.", "Use a positive ratio or leave both optional fields blank.")
-            if not symbol and not np.isnan(ratio) and ratio > 0:
-                add_issue(row, symbol_field, f"{ratio_field} has a number but {symbol_field} is blank.", "Enter the optional element symbol or clear the ratio.")
-
-        # Allowed labels after normalization.
-        #
-        # "other/needs review" means the app could not confidently interpret the
-        # raw entry. Students/instructors should review those rows manually.
-        phase_label = clean_label(row.get("P"))
-        bubble_label = clean_label(row.get("Bub"))
-
-        if phase_label == "other/needs review" or phase_label not in PHASE_MAP:
-            raw_phase = clean_text(row.get("P_raw", row.get("P", "")))
-            add_issue(
-                row,
-                "P",
-                f"Unrecognized phase label: '{raw_phase}'.",
-                "Use pure, impure, or a recognized not-made/failed-compound wording.",
+        for field, issue, suggestion, severity in classify_row_issues(row, valid_symbols):
+            issues.append(
+                {
+                    "Row": row.get("SourceRow", ""),
+                    "GroupNumber": row.get("GroupNumber", ""),
+                    "Slot": row.get("Slot", ""),
+                    "Formula": row.get("Formula", ""),
+                    "Field": field,
+                    "Issue": issue,
+                    "Suggestion": suggestion,
+                    "Severity": severity,
+                }
             )
-        if bubble_label == "other/needs review" or bubble_label not in BUBBLE_MAP:
-            raw_bubble = clean_text(row.get("Bub_raw", row.get("Bub", "")))
-            add_issue(row, "Bub", f"Unrecognized bubble response: '{raw_bubble}'.", "Use exactly: yes, no, or maybe.")
 
     return pd.DataFrame(issues)
+
+
+@st.cache_data(show_spinner=False)
+def split_quarantine(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split rows into (kept, quarantined) based on CRITICAL data-entry errors.
+
+    A row is quarantined if it has at least one critical issue — a missing or
+    unknown element, or a missing/non-positive required ratio. This automates the
+    row removal an instructor would otherwise do by hand. The quarantined frame
+    carries a "QuarantineReasons" column explaining why each row was held back.
+
+    Rows with only minor issues are kept. Returns (kept_df, quarantined_df).
+    """
+
+    if clean_df.empty:
+        return clean_df.copy(), clean_df.copy()
+
+    _name_to_symbol, valid_symbols = make_element_maps(atomic)
+
+    critical_index: List = []
+    reasons_by_index: dict = {}
+    for idx, row in clean_df.iterrows():
+        critical = [issue for _f, issue, _s, sev in classify_row_issues(row, valid_symbols) if sev == CRITICAL]
+        if critical:
+            critical_index.append(idx)
+            reasons_by_index[idx] = "; ".join(dict.fromkeys(critical))  # de-duplicated, ordered
+
+    kept = clean_df.drop(index=critical_index).copy()
+    quarantined = clean_df.loc[critical_index].copy()
+    if not quarantined.empty:
+        quarantined.insert(0, "QuarantineReasons", [reasons_by_index[i] for i in quarantined.index])
+
+    return kept, quarantined
 
 
 @st.cache_data(show_spinner=False)
