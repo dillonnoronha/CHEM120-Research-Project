@@ -942,6 +942,9 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
     # which drop "maybe". NaN here means the row is excluded pairwise from the
     # BubbleYes correlations only (other feature pairs keep every row).
     df["BubbleYesNo"] = df["Bub"].map({"yes": 1.0, "no": 0.0})
+    # Pure-vs-impure version for the correlation map ("not made" = NaN). Binary
+    # 0/1 is valid in Pearson correlation; the 0/1/2 PhaseN ordering is not.
+    df["PureYesNo"] = df["P"].map({"pure": 1.0, "impure": 0.0})
 
     # Reconstruct formula after cleaning.
     df["Formula"] = df.apply(reconstruct_formula, axis=1)
@@ -1182,6 +1185,15 @@ def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_ta
 
     df = clean_df.copy()
 
+    # Guarantee expected element/ratio columns exist even if the caller skipped
+    # clean_and_encode_data (e.g. unit tests or future analysis scripts).
+    for col in ["A", "AP", "B", "BP", "BDP", "O"]:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["AN", "APN", "BN", "BPN", "BDPN", "ON"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
     atomic_index = atomic.set_index("Symbol")
     en_index = en_table.set_index("Symbol") if not en_table.empty and "Symbol" in en_table.columns else pd.DataFrame()
 
@@ -1307,17 +1319,41 @@ def summarize_by_element(df: pd.DataFrame, element_col: str, min_rows: int = 1) 
     return summary.sort_values(["bubble_yes_rate", "compounds"], ascending=[False, False])
 
 
-def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str):
-    """Return a clean matplotlib bar chart."""
+def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str, horizontal: bool = False):
+    """
+    Return a clean matplotlib bar chart.
 
-    fig, ax = plt.subplots(figsize=(8, 4.2))
+    Use horizontal=True when category names are long (e.g. feature importance):
+    horizontal bars put the names flat on the y-axis so nothing is rotated.
+    """
+
     plot_data = data[[x_col, y_col]].dropna().head(12)
-    ax.bar(plot_data[x_col].astype(str), plot_data[y_col])
+
+    if horizontal:
+        fig_height = max(3.2, 0.45 * len(plot_data) + 1.2)
+        fig, ax = plt.subplots(figsize=(8, fig_height))
+        # Reverse so the largest bar is at the top.
+        values = plot_data[y_col][::-1]
+        ax.barh(plot_data[x_col].astype(str)[::-1], values)
+        ax.set_xlabel(ylabel)
+        ax.set_ylabel("")
+        ax.grid(axis="x", alpha=0.25)
+        # Anchor at 0 and label each bar so lengths read accurately.
+        max_val = float(values.max()) if len(values) else 0.0
+        if max_val > 0:
+            ax.set_xlim(0, max_val * 1.18)
+            for y_pos, value in enumerate(values):
+                ax.text(value + max_val * 0.02, y_pos, f"{value:.3f}", va="center", fontsize=8)
+    else:
+        fig, ax = plt.subplots(figsize=(8, 4.2))
+        ax.bar(plot_data[x_col].astype(str), plot_data[y_col])
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("")
+        # ha="right" anchors rotated labels under their bars instead of floating.
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+        ax.grid(axis="y", alpha=0.25)
+
     ax.set_title(title, fontsize=13, fontweight="bold")
-    ax.set_ylabel(ylabel)
-    ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=35)
-    ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
     return fig
 
@@ -1404,11 +1440,14 @@ def plot_distribution(
 def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
     """Create a correlation matrix from the numeric columns used in the app."""
 
-    # BubbleYesNo (yes vs no, "maybe" = NaN) is used instead of BubbleYes so the
-    # map matches the ML models, which also drop "maybe". It is relabeled to
-    # "BubbleYes" below so the chart stays readable.
+    # Outcome columns use clean binary versions so Pearson correlation stays
+    # valid: BubbleYesNo (yes vs no, "maybe" = NaN) and PureYesNo (pure vs
+    # impure, "not made" = NaN). The 0/1/2 PhaseN encoding is NOT used here
+    # because its ordering is arbitrary and would distort the correlations.
+    # True categoricals (element symbols) never belong in a Pearson map — the
+    # chi-squared tests in ML Lab cover those instead.
     candidates = [
-        "BubbleYesNo", "PhaseN",
+        "BubbleYesNo", "PureYesNo",
         "AN", "APN", "BN", "BPN", "BDPN", "ON",
         "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
         "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
@@ -1418,13 +1457,20 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
 
     numeric_cols = [c for c in candidates if c in df.columns]
     numeric = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
-    numeric = numeric.dropna(axis=1, how="all")
+
+    # Drop columns that cannot produce a meaningful correlation — mostly-empty
+    # optional ratios (e.g. BDPN with one filled cell) or constant columns
+    # otherwise render as a blank white row+column cross in the heatmap.
+    enough_values = numeric.notna().sum() >= 4
+    has_variance = numeric.std(ddof=0) > 0
+    numeric = numeric.loc[:, enough_values & has_variance]
 
     if numeric.shape[1] < 2:
         return pd.DataFrame()
 
     corr = numeric.corr(numeric_only=True)
-    return corr.rename(index={"BubbleYesNo": "BubbleYes"}, columns={"BubbleYesNo": "BubbleYes"})
+    display_names = {"BubbleYesNo": "BubbleYes", "PureYesNo": "PureYes"}
+    return corr.rename(index=display_names, columns=display_names)
 
 
 def plot_heatmap(corr: pd.DataFrame):

@@ -484,7 +484,7 @@ class TestTrainMLModel:
         result = train_ml_model(df)
 
         assert result["ok"] is False
-        assert "both bubble=yes" in result["message"]
+        assert "both bubble = yes and bubble = no" in result["message"]
 
     def test_train_model_success_mixed_data(self, sample_clean_data):
         """train_ml_model trains successfully with mixed classes."""
@@ -499,8 +499,12 @@ class TestTrainMLModel:
         assert result["ok"] is True
         assert "model" in result
         assert "feature_columns" in result
-        assert "rf_accuracy" in result
-        assert "lr_accuracy" in result
+        # Per-model score dicts for Random Forest, Gradient Boosting, Logistic Regression.
+        for key in ["rf", "gb", "lr", "best"]:
+            assert key in result
+            assert "accuracy" in result[key]
+            assert "balanced_accuracy" in result[key]
+        assert result["model_name"] in {"Random Forest", "Gradient Boosting"}
 
     def test_train_model_returns_metrics(self, sample_clean_data):
         """train_ml_model returns expected metrics."""
@@ -512,8 +516,10 @@ class TestTrainMLModel:
         result = train_ml_model(df)
 
         if result["ok"]:
-            assert 0 <= result["rf_accuracy"] <= 1
-            assert 0 <= result["lr_accuracy"] <= 1
+            for key in ["rf", "gb", "lr"]:
+                assert 0 <= result[key]["accuracy"] <= 1
+                assert 0 <= result[key]["balanced_accuracy"] <= 1
+            assert 0 <= result["baseline_accuracy"] <= 1
             assert result["training_rows"] > 0
             assert result["testing_rows"] > 0
 

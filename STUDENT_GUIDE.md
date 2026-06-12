@@ -2,18 +2,14 @@
 
 ## Best order to use the app
 
-The app loads `Combined_Data.xlsx` automatically (or upload your own file in the sidebar). Then just scroll down the page:
+The app loads `Combined_Data.xlsx` automatically (or upload your own file in the sidebar). Then work through the three main tabs:
 
-1. **Check Data** — confirm compounds loaded and review any issues.
-2. **Explore Results** — compare A-site and B-site elements.
-3. **Relationship Map** — look at numeric relationships.
-
-Then use the tabs at the bottom:
-
-4. **ML Lab** — train models and test possible compounds as hypotheses.
-5. **Add Compound** — create a new cleaned entry.
-6. **Export** — save cleaned files.
-7. **New Semester** — merge a new semester's file into the dataset.
+1. **✅ Check Data** — confirm compounds loaded and review any issues.
+2. **📊 Explore & Relationships** — compare A-site/B-site elements and view the relationship map.
+3. **🤖 ML Lab & Tools** — train models and test compounds, plus the inner tools:
+   - **Add Compound** — create a new cleaned entry.
+   - **Export** — save cleaned files.
+   - **New Semester** — merge a new semester's file into the dataset.
 
 ## What is bubble response?
 

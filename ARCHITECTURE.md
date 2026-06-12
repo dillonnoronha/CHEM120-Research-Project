@@ -42,15 +42,14 @@ Export: CSV / Excel download   ·   New Semester: merge a new file into the data
 
 ## Page Layout (`app.py`)
 
-The primary content **scrolls** through three sections, then four action **tabs** sit at the bottom.
+A hero header and health cards sit on top; everything else lives in **three main tabs** (the third nests the action tools as inner tabs).
 
 1. **Sidebar:** file upload, outlier-sensitivity slider, quick-help
 2. **Hero header:** title and workflow steps
-3. **Health cards:** loaded compounds, validation summary, bubble outcomes
-4. **Check Data** (scroll): validation issues (Critical/Minor), outliers, cleaned compound table
-5. **Explore Results** (scroll): bubble/phase distributions, A-site & B-site trends, filters
-6. **Relationship Map** (scroll): correlation heatmap + strongest links to bubbling
-7. **Tabs:** **ML Lab** · **Add Compound** · **Export** · **New Semester**
+3. **Health cards:** loaded compounds, validation summary
+4. **Tab — ✅ Check Data:** validation issues (Critical/Minor), outliers, cleaned compound table
+5. **Tab — 📊 Explore & Relationships:** count tables, A-site & B-site trends (bubbling/purity toggle), correlation heatmap
+6. **Tab — 🤖 ML Lab & Tools:** ML Lab plus inner tabs **Add Compound · Export · New Semester**
 
 Session state tracks manually added compounds in `st.session_state.manual_entries`.
 

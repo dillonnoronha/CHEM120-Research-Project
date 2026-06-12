@@ -27,7 +27,8 @@ Upload `Combined_Data.xlsx` or any CHEM 120 survey export.
 
 ## Layout
 
-The page scrolls through three sections — **Check Data → Explore Results → Relationship Map** — then four tabs at the bottom: **ML Lab | Add Compound | Export | New Semester**.
+Three main tabs: **✅ Check Data | 📊 Explore & Relationships | 🤖 ML Lab & Tools**.
+The third tab nests the action tools: **ML Lab | Add Compound | Export | New Semester**.
 
 ## ML Lab
 

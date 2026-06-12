@@ -19,8 +19,9 @@ CHEM 120 Catalyst Insight Studio - Quick Start for Windows
 5. The app loads Combined_Data.xlsx automatically. To use a different
    file, upload it in the left sidebar.
 
-6. Scroll down the page: Check Data -> Explore Results -> Relationship Map.
-   Then use the tabs at the bottom: ML Lab | Add Compound | Export | New Semester.
+6. Use the three main tabs in order:
+   Check Data -> Explore & Relationships -> ML Lab & Tools
+   (the third tab contains ML Lab | Add Compound | Export | New Semester).
 
 Notes
 -----
