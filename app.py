@@ -3,8 +3,24 @@ CHEM 120 Catalyst Insight Studio
 =================================
 
 Streamlit UI entry point. All data loading, cleaning, validation, descriptors,
-plotting, and ML logic lives in pipeline.py. This file only handles the page
-layout, widgets, and calls into pipeline.
+plotting, and ML logic lives in pipeline.py. This file only handles page layout,
+widgets, and calls into pipeline.
+
+Layout
+------
+The screen is organized as TABS (not a long scroll). `main()` loads the data and
+then hands each tab to a small `render_*()` function:
+
+    Check   -> render_check_tab()        data-entry issues, outliers, clean table
+    Explore -> render_explore_tab()      response-count tables, per-element tables
+    Heatmap -> render_heatmap_tab()      correlation map with a feature filter
+    Predict -> render_ml_tab()           bubble + purity models and predictions
+    Add     -> render_add_compound_tab() stage a new compound by hand
+    Export  -> render_export_tab()       download cleaned data and reports
+    Semester-> render_new_semester_tab() merge a new semester's raw export
+
+To add a new tab: write a new `render_*_tab()` function and add it to the
+`tab_objects` / `render` pairing inside `main()`.
 
 Run locally:
     py -m pip install -r requirements.txt
@@ -28,6 +44,7 @@ from pipeline import (
     detect_numeric_outliers,
     display_label,
     find_default_database,
+    label_count_table,
     load_atomic_table_from_bytes,
     load_en_table_from_bytes,
     make_demo_dataset,
@@ -38,12 +55,12 @@ from pipeline import (
     numeric_correlation_table,
     ordered_columns,
     plot_bar_chart,
-    plot_distribution,
     plot_heatmap,
     read_local_table,
     read_table_from_bytes,
     summarize_by_element,
     train_ml_model,
+    train_purity_model,
     validate_compound_rows,
 )
 
@@ -73,9 +90,7 @@ def inject_css() -> None:
             max-width: 1220px;
         }
 
-        h1, h2, h3 {
-            letter-spacing: -0.03em;
-        }
+        h1, h2, h3 { letter-spacing: -0.03em; }
 
         div[data-testid="stSidebarContent"] {
             background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
@@ -116,18 +131,18 @@ def inject_css() -> None:
         }
 
         .hero {
-            padding: 2rem 2.2rem;
+            padding: 1.6rem 2rem;
             border: 1px solid var(--chem-border);
-            border-radius: 28px;
+            border-radius: 24px;
             background:
                 radial-gradient(circle at top left, rgba(0, 113, 227, 0.12), transparent 28%),
                 linear-gradient(135deg, #ffffff 0%, #f5f5f7 100%);
-            box-shadow: 0 18px 55px rgba(0,0,0,0.08);
-            margin-bottom: 1.5rem;
+            box-shadow: 0 14px 45px rgba(0,0,0,0.07);
+            margin-bottom: 1.2rem;
         }
 
         .hero-title {
-            font-size: 2.45rem;
+            font-size: 2.1rem;
             line-height: 1.05;
             font-weight: 760;
             color: var(--chem-ink);
@@ -136,9 +151,9 @@ def inject_css() -> None:
 
         .hero-subtitle {
             color: var(--chem-muted);
-            font-size: 1.08rem;
-            margin-top: 0.85rem;
-            max-width: 860px;
+            font-size: 1rem;
+            margin-top: 0.5rem;
+            max-width: 820px;
         }
 
         .soft-card {
@@ -151,20 +166,11 @@ def inject_css() -> None:
             color: var(--chem-ink);
         }
 
-        .small-label {
-            color: var(--chem-muted);
-            font-size: 0.82rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin-bottom: 0.25rem;
-        }
-
         .big-number {
             color: var(--chem-ink);
-            font-size: 1.85rem;
+            font-size: 1.5rem;
             font-weight: 760;
-            line-height: 1;
+            line-height: 1.1;
         }
 
         .helper-text {
@@ -173,42 +179,20 @@ def inject_css() -> None:
             line-height: 1.45;
         }
 
-        .step-pill {
-            display: inline-block;
-            padding: 0.35rem 0.7rem;
-            border-radius: 999px;
-            background: #eef5ff;
-            color: #0057b8;
-            font-size: 0.8rem;
-            font-weight: 700;
-            margin-right: 0.4rem;
-            margin-bottom: 0.4rem;
-        }
-
-        .status-ok {
-            border-left: 4px solid #30d158;
-        }
-
-        .status-warn {
-            border-left: 4px solid #ff9f0a;
-        }
-
-        .status-bad {
-            border-left: 4px solid #ff453a;
-        }
+        .status-ok   { border-left: 4px solid #30d158; }
+        .status-warn { border-left: 4px solid #ff9f0a; }
+        .status-bad  { border-left: 4px solid #ff453a; }
 
         div[data-testid="stMetricValue"] {
             font-weight: 760;
             letter-spacing: -0.04em;
         }
 
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-        }
+        .stTabs [data-baseweb="tab-list"] { gap: 8px; }
 
         .stTabs [data-baseweb="tab"] {
             border-radius: 999px;
-            padding: 0.65rem 1rem;
+            padding: 0.6rem 1rem;
             background-color: #f5f5f7;
             color: #1d1d1f !important;
         }
@@ -218,9 +202,7 @@ def inject_css() -> None:
             color: #0057b8 !important;
         }
 
-        .stTabs [data-baseweb="tab"] p {
-            color: inherit !important;
-        }
+        .stTabs [data-baseweb="tab"] p { color: inherit !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -228,251 +210,57 @@ def inject_css() -> None:
 
 
 # =============================================================================
-# UI COMPONENTS
+# TAB RENDERERS
+# Each function renders ONE tab. They take only the data they need so they are
+# easy to read, test, and reorder. None of them create the tab container itself
+# (main() does that) — they just fill it.
 # =============================================================================
 
-def metric_card(label: str, value: object, help_text: str = "") -> None:
-    """Display a small Apple-style metric card."""
+def render_check_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outlier_df: pd.DataFrame) -> None:
+    """Tab 1 — surface data-entry problems before any analysis."""
 
-    st.markdown(
-        f"""
-        <div class="soft-card">
-            <div class="small-label">{label}</div>
-            <div class="big-number">{value}</div>
-            <div class="helper-text">{help_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.caption("Find and fix data-entry mistakes before using the data for graphs or ML.")
 
-
-# =============================================================================
-# STREAMLIT APP
-# =============================================================================
-
-def main() -> None:
-    """Run the Streamlit app."""
-
-    st.set_page_config(
-        page_title=APP_TITLE,
-        page_icon="🧪",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    inject_css()
-
-    # -------------------------------------------------------------------------
-    # Sidebar: upload files and select basic settings.
-    # -------------------------------------------------------------------------
-    st.sidebar.markdown("## 🧪 CHEM 120")
-    st.sidebar.caption("Upload class data, check it, then explore patterns.")
-
-    st.sidebar.markdown("### 1. Upload")
-    uploaded_data = st.sidebar.file_uploader(
-        "Class spreadsheet",
-        type=["csv", "xlsx", "xlsm", "xls"],
-        help="Upload Combined_Data.xlsx or another CHEM 120 survey/database file.",
-    )
-    uploaded_atomic = None
-    uploaded_en = None
-
-    st.sidebar.markdown("### 2. Controls")
-    z_threshold = st.sidebar.slider(
-        "Outlier sensitivity",
-        min_value=2.0,
-        max_value=5.0,
-        value=3.0,
-        step=0.25,
-        help="Lower values flag more possible outliers. Higher values only flag very extreme values.",
-    )
-    use_phase_in_ml = st.sidebar.toggle(
-        "Use phase in ML model",
-        value=True,
-        help="Turn off if you want the model to ignore pure/impure phase labels.",
-    )
-
-    st.sidebar.markdown("### 3. Quick help")
-    st.sidebar.info(
-        "Best workflow: upload data → check errors → explore charts → use ML as a hypothesis tool → export cleaned results."
-    )
-
-    # -------------------------------------------------------------------------
-    # Hero header.
-    # -------------------------------------------------------------------------
-    st.markdown(
-        f"""
-        <div class="hero">
-            <div class="hero-title">{APP_TITLE}</div>
-            <div class="hero-subtitle">{APP_SUBTITLE}</div>
-            <div style="margin-top:1rem;">
-                <span class="step-pill">1 Upload</span>
-                <span class="step-pill">2 Check</span>
-                <span class="step-pill">3 Explore</span>
-                <span class="step-pill">4 Hypothesize</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # -------------------------------------------------------------------------
-    # Load reference tables.
-    # -------------------------------------------------------------------------
-    try:
-        atomic_bytes = uploaded_atomic.getvalue() if uploaded_atomic is not None else None
-        atomic_name = uploaded_atomic.name if uploaded_atomic is not None else ""
-        atomic = load_atomic_table_from_bytes(atomic_bytes, atomic_name)
-
-        en_bytes = uploaded_en.getvalue() if uploaded_en is not None else None
-        en_name = uploaded_en.name if uploaded_en is not None else ""
-        en_table = load_en_table_from_bytes(en_bytes, en_name)
-    except Exception as exc:
-        st.error(f"Reference table error: {exc}")
-        st.stop()
-
-    # -------------------------------------------------------------------------
-    # Load class data. Uploaded file has priority, then local default, then demo.
-    # -------------------------------------------------------------------------
-    try:
-        if uploaded_data is not None:
-            raw_df = read_table_from_bytes(uploaded_data.getvalue(), uploaded_data.name)
-        else:
-            default_path = find_default_database()
-            if default_path is not None:
-                raw_df = read_local_table(str(default_path))
-            else:
-                raw_df = make_demo_dataset()
-    except Exception as exc:
-        st.error(f"Could not load class data: {exc}")
-        st.stop()
-
-    # -------------------------------------------------------------------------
-    # Run the main data pipeline. Each step is cached for speed.
-    # -------------------------------------------------------------------------
-    long_df, column_warnings = normalize_to_long_format(raw_df)
-    if column_warnings:
-        with st.expander("⚠️ Column mapping problems — expand to see details", expanded=True):
-            st.warning(
-                "The app could not match one or more required columns in your file. "
-                "This usually means the Google Form question wording changed. "
-                "See **DEVELOPER_NOTES.md → When the Google Form changes** for fix instructions."
-            )
-            for w in column_warnings:
-                st.markdown(f"- {w}")
-    clean_df = clean_and_encode_data(long_df, atomic)
-    described_df = add_chemical_descriptors(clean_df, atomic, en_table)
-
-    # Add manually staged rows from the Add Compound tab.
-    if "manual_entries" not in st.session_state:
-        st.session_state.manual_entries = pd.DataFrame()
-    if "pending_manual_entry" not in st.session_state:
-        st.session_state.pending_manual_entry = pd.DataFrame()
-    if "pending_manual_issues" not in st.session_state:
-        st.session_state.pending_manual_issues = pd.DataFrame()
-
-    if not st.session_state.manual_entries.empty:
-        described_df = pd.concat([described_df, st.session_state.manual_entries], ignore_index=True)
-
-    issues_df = validate_compound_rows(described_df, atomic)
-    outlier_df = detect_numeric_outliers(described_df, z_threshold=z_threshold)
-    yes_count = int(described_df["BubbleYes"].sum()) if "BubbleYes" in described_df.columns else 0
-
-    # -------------------------------------------------------------------------
-    # Data health cards.
-    # -------------------------------------------------------------------------
-    health_cols = st.columns(3)
-    with health_cols[0]:
-        style = "status-ok" if len(described_df) > 0 else "status-bad"
-        st.markdown(
-            f"""<div class="soft-card {style}">
-            <b>Loaded compounds</b><br>
-            <span class="helper-text">{len(described_df):,} compound rows are ready for analysis.</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with health_cols[1]:
-        style = "status-ok" if len(issues_df) == 0 else "status-warn"
-        st.markdown(
-            f"""<div class="soft-card {style}">
-            <b>Validation report</b><br>
-            <span class="helper-text">{len(issues_df):,} possible data-entry issues found. See Check Data below.</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with health_cols[2]:
-        style = "status-ok" if yes_count > 0 else "status-warn"
-        st.markdown(
-            f"""<div class="soft-card {style}">
-            <b>Bubble outcomes</b><br>
-            <span class="helper-text">{yes_count:,} compounds labeled bubble = yes.</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    with st.expander("What do A-site, B-site, phase, and bubble mean?"):
-        st.markdown(
-            """
-            - **A-site element**: the first main element position in the perovskite-style formula.
-            - **B-site element**: the main element position before oxygen, often a transition metal.
-            - **Phase**: whether the sample was recorded as `pure` or `impure`.
-            - **Bubble response**: whether visible bubbles were observed: `yes`, `no`, or `maybe`.
-            - **Descriptors**: calculated numbers such as atomic mass, atomic number, and formula mass.
-            """
-        )
-
-    st.divider()
-
-    # =========================================================================
-    # SECTION 1: CHECK DATA
-    # =========================================================================
-    st.subheader("✅ Check Data")
-    st.write(
-        "Review data-entry mistakes before using the dataset for graphs or machine learning."
-    )
-
-    check_cols = st.columns([1, 1])
+    # Both columns use the same lead-in pattern (header + one-line caption + a
+    # fixed-height table) so the two tables line up vertically.
+    check_cols = st.columns(2)
     with check_cols[0]:
         st.markdown("#### Validation issues")
         if issues_df.empty:
-            st.success("No validation issues found.")
+            st.caption("No validation issues found. ✅")
+            st.dataframe(issues_df, use_container_width=True, height=300)
         else:
-            st.warning(f"{len(issues_df):,} possible issues found. Review these before final analysis.")
+            st.caption(f"{len(issues_df):,} possible issues. Review before final analysis.")
             st.dataframe(issues_df, use_container_width=True, height=300)
     with check_cols[1]:
         st.markdown("#### Possible numeric outliers")
         if outlier_df.empty:
-            st.success("No numeric outliers found at the current sensitivity.")
+            st.caption("No outliers at the current sensitivity. ✅")
+            st.dataframe(outlier_df, use_container_width=True, height=300)
         else:
-            st.info("Outliers are not automatically wrong. They are values worth double-checking.")
+            st.caption("Outliers aren't automatically wrong — just worth a second look.")
             st.dataframe(outlier_df, use_container_width=True, height=300)
 
     st.markdown("#### Cleaned compound table")
     if described_df.empty:
-        st.warning("No compound rows found. Check whether the uploaded file uses recognizable column names like 1A, 1AN, 1B, 1BN, 1O, 1ON, 1P, and 1Bub.")
+        st.warning("No compound rows found. Check that the file uses columns like 1A, 1AN, 1B, 1BN, 1O, 1ON, 1P, 1Bub.")
     else:
         st.dataframe(described_df[ordered_columns(described_df)], use_container_width=True, height=380)
 
-    with st.expander("How to fix common issues"):
+    with st.expander("Data-entry rules"):
         st.markdown(
-            """
-            - Use **element symbols**, not full names: `La`, not `Lanthanum`.
-            - Use **numbers only** for ratios: `2`, not `two`.
-            - Oxygen should be entered as **O**.
-            - Phase should be exactly **pure** or **impure**.
-            - Bubble response should be exactly **yes**, **no**, or **maybe**.
-            """
+            "- Element **symbols**, not names: `La`, not `Lanthanum`.\n"
+            "- **Numbers** for ratios: `2`, not `two`.\n"
+            "- Oxygen is **O**. Phase is **pure** or **impure**. Bubble is **yes / no / maybe**."
         )
 
-    st.divider()
 
-    # =========================================================================
-    # SECTION 2: EXPLORE RESULTS
-    # =========================================================================
-    st.subheader("📊 Explore Results")
-    st.write(
-        "Compare compounds and look for patterns. These graphs are descriptive — not proof of causation."
-    )
+def render_explore_tab(described_df: pd.DataFrame) -> None:
+    """Tab 2 — response-count tables and per-element bubble/pure summaries."""
 
+    st.caption("Descriptive tables only — patterns to discuss, not proof of cause.")
+
+    # Optional filters by semester and instructor.
     semesters = sorted([x for x in described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
     instructors = sorted([x for x in described_df.get("Instructor", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
 
@@ -484,7 +272,7 @@ def main() -> None:
         selected_instructors = st.pills("Instructor", instructors, default=instructors, selection_mode="multi", label_visibility="collapsed")
         st.caption("Instructor")
     with filter_cols[2]:
-        hide_rare = st.checkbox("Hide elements with fewer than 3 compounds", value=True)
+        hide_rare = st.checkbox("Hide elements with < 3 compounds", value=True)
         min_rows = 3 if hide_rare else 1
 
     filtered = described_df.copy()
@@ -495,529 +283,552 @@ def main() -> None:
 
     if filtered.empty:
         st.warning("No rows match the selected filters.")
-    else:
-        plot_df = filtered.copy()
-        if "P_raw" in plot_df.columns:
-            plot_df["PhasePlotLabel"] = plot_df["P_raw"].apply(
-                lambda value: display_label(normalize_phase_label(value))
-            )
+        return
+
+    # Build display labels for the count tables. Prefer the raw wording so the
+    # tables reflect exactly what students typed (after normalization).
+    plot_df = filtered.copy()
+    phase_src = "P_raw" if "P_raw" in plot_df.columns else "P"
+    bub_src = "Bub_raw" if "Bub_raw" in plot_df.columns else "Bub"
+    plot_df["PhasePlotLabel"] = plot_df[phase_src].apply(lambda v: display_label(normalize_phase_label(v)))
+    plot_df["BubblePlotLabel"] = plot_df[bub_src].apply(lambda v: display_label(normalize_bubble_label(v)))
+
+    # --- Response counts as tables (not charts) ---
+    st.markdown("#### Response counts")
+    count_cols = st.columns(2)
+    with count_cols[0]:
+        st.markdown("**Bubble response**")
+        st.dataframe(
+            label_count_table(plot_df, "BubblePlotLabel", kind="bubble",
+                              preferred_order=["Yes", "No", "Maybe", "Other / needs review", "Missing"]),
+            use_container_width=True, hide_index=True,
+        )
+    with count_cols[1]:
+        st.markdown("**Phase result**")
+        st.dataframe(
+            label_count_table(plot_df, "PhasePlotLabel", kind="phase",
+                              preferred_order=["Pure", "Impure", "Not made", "Other / needs review", "Missing"]),
+            use_container_width=True, hide_index=True,
+        )
+
+    # --- Per-element bubble AND pure summaries as tables ---
+    st.markdown("#### Elements vs. bubbling and purity")
+    st.caption("Bubble yes % and Pure % for each element. Percentages of that element's compounds.")
+
+    a_summary = summarize_by_element(filtered, "A", min_rows=int(min_rows))
+    b_summary = summarize_by_element(filtered, "B", min_rows=int(min_rows))
+    view_cols = ["compounds", "bubble_yes_rate", "pure_rate", "avg_formula_mass"]
+    rename = {"compounds": "Compounds", "bubble_yes_rate": "Bubble yes %",
+              "pure_rate": "Pure %", "avg_formula_mass": "Avg formula mass"}
+
+    elem_cols = st.columns(2)
+    with elem_cols[0]:
+        st.markdown("**A-site elements**")
+        if a_summary.empty:
+            st.info("Not enough A-site data for this filter.")
         else:
-            plot_df["PhasePlotLabel"] = plot_df["P"].apply(
-                lambda value: display_label(normalize_phase_label(value))
-            )
-
-        if "Bub_raw" in plot_df.columns:
-            plot_df["BubblePlotLabel"] = plot_df["Bub_raw"].apply(
-                lambda value: display_label(normalize_bubble_label(value))
-            )
+            st.dataframe(a_summary[["A"] + view_cols].rename(columns=rename).round(1),
+                         use_container_width=True, hide_index=True, height=300)
+    with elem_cols[1]:
+        st.markdown("**B-site elements**")
+        if b_summary.empty:
+            st.info("Not enough B-site data for this filter.")
         else:
-            plot_df["BubblePlotLabel"] = plot_df["Bub"].apply(
-                lambda value: display_label(normalize_bubble_label(value))
-            )
+            st.dataframe(b_summary[["B"] + view_cols].rename(columns=rename).round(1),
+                         use_container_width=True, hide_index=True, height=300)
 
-        dist_cols = st.columns(2)
-        with dist_cols[0]:
-            st.pyplot(
-                plot_distribution(
-                    plot_df,
-                    "BubblePlotLabel",
-                    "Bubble response counts",
-                    preferred_order=["Yes", "No", "Maybe", "Other / needs review", "Missing"],
-                ),
-                use_container_width=True,
-            )
-            st.caption("How many compounds were recorded as yes, no, maybe, or missing.")
-        with dist_cols[1]:
-            st.pyplot(
-                plot_distribution(
-                    plot_df,
-                    "PhasePlotLabel",
-                    "Phase counts",
-                    preferred_order=["Pure", "Impure", "Not made", "Other / needs review", "Missing"],
-                ),
-                use_container_width=True,
-            )
-            st.caption(
-                "Long phase answers are grouped into readable categories: Pure, Impure, Not made, or Needs review."
-            )
+    with st.expander("Descriptor preview"):
+        descriptor_cols = [c for c in [
+            "Formula", "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
+            "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio", "BubbleLabel", "PhaseLabel",
+        ] if c in filtered.columns]
+        st.dataframe(filtered[descriptor_cols].round(4), use_container_width=True, height=300)
 
-        st.markdown("### Which elements appear more often with bubbling?")
-        st.caption("Bubble yes rate = percentage of compounds in that group where Bubble Response was `yes`.")
 
-        a_summary = summarize_by_element(filtered, "A", min_rows=int(min_rows))
-        b_summary = summarize_by_element(filtered, "B", min_rows=int(min_rows))
+def render_heatmap_tab(described_df: pd.DataFrame) -> None:
+    """Tab 3 — correlation heatmap with a feature-selection filter."""
 
-        chart_cols = st.columns(2)
-        with chart_cols[0]:
-            st.markdown("#### A-site trend")
-            if a_summary.empty:
-                st.info("Not enough A-site data for the current filter.")
-            else:
-                st.pyplot(
-                    plot_bar_chart(a_summary, "A", "bubble_yes_rate", "A-site bubble yes rate", "Bubble yes rate (%)"),
-                    use_container_width=True,
-                )
-                st.dataframe(a_summary.round(3), use_container_width=True, height=240)
-        with chart_cols[1]:
-            st.markdown("#### B-site trend")
-            if b_summary.empty:
-                st.info("Not enough B-site data for the current filter.")
-            else:
-                st.pyplot(
-                    plot_bar_chart(b_summary, "B", "bubble_yes_rate", "B-site bubble yes rate", "Bubble yes rate (%)"),
-                    use_container_width=True,
-                )
-                st.dataframe(b_summary.round(3), use_container_width=True, height=240)
-
-        with st.expander("Descriptor preview"):
-            descriptor_cols = [
-                "Formula", "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
-                "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio", "BubbleLabel", "PhaseLabel",
-            ]
-            descriptor_cols = [c for c in descriptor_cols if c in filtered.columns]
-            st.dataframe(filtered[descriptor_cols].round(4), use_container_width=True, height=300)
-
-    st.divider()
-
-    # =========================================================================
-    # SECTION 3: RELATIONSHIP MAP
-    # =========================================================================
-    st.subheader("🧭 Relationship Map")
-    st.write(
-        "Each square in the heatmap compares two numeric features. Look at the BubbleYes row to see what may relate to bubbling."
-    )
+    st.caption("Each cell compares two numeric features. Read the BubbleYes / PhaseN rows for links to outcomes.")
 
     corr = numeric_correlation_table(described_df)
-
     if corr.empty:
-        st.warning("Not enough numeric columns available to build a relationship map.")
-    else:
-        heatmap_cols = st.columns([1.2, 1])
-        with heatmap_cols[0]:
-            st.pyplot(plot_heatmap(corr), use_container_width=True)
-        with heatmap_cols[1]:
-            st.markdown("#### How to read this")
-            st.markdown(
-                """
-                - **+1.00** — two features tend to increase together.
-                - **0.00** — little or no linear relationship.
-                - **-1.00** — one increases while the other decreases.
+        st.warning("Not enough numeric columns to build a relationship map.")
+        return
 
-                This does **not** prove cause and effect. It suggests patterns worth investigating.
-                """
-            )
-            rel = bubble_relationships(corr)
-            st.markdown("#### Strongest links to bubble result")
-            if rel.empty:
-                st.info("Bubble relationship summary not available yet.")
-            else:
-                st.dataframe(rel.round(3), use_container_width=True, height=280)
+    # Feature filter: let the user focus on a handful of features.
+    all_features = list(corr.columns)
+    default_features = [c for c in [
+        "BubbleYes", "PhaseN", "B_avg_Z", "A_avg_Z", "FormulaMass",
+        "O_to_cation_ratio", "B_to_A_ratio", "Avg_cation_Z", "Mixed_B_site",
+    ] if c in all_features] or all_features
 
-        with st.expander("Example interpretation"):
-            st.markdown(
-                """
-                If `B_avg_Z` has a positive correlation with `BubbleYes`, compounds with a higher
-                average B-site atomic number tended to have more `bubble = yes` results in this dataset.
-                That does **not** mean atomic number causes bubbling — it is a pattern worth discussing
-                and testing with more experiments.
-                """
-            )
+    selected = st.multiselect(
+        "Features to compare",
+        options=all_features,
+        default=default_features,
+        help="Keep BubbleYes and PhaseN to see what links to bubbling and purity.",
+    )
+    corr_view = corr.loc[selected, selected] if len(selected) >= 2 else corr.loc[default_features, default_features]
+    if len(selected) < 2:
+        st.info("Select at least two features. Showing defaults for now.")
 
-    st.divider()
-
-    # =========================================================================
-    # TABS: ML LAB | ADD COMPOUND | EXPORT
-    # =========================================================================
-    action_tabs = st.tabs(["🤖 ML Lab", "➕ Add Compound", "⬇️ Export", "🔄 New Semester"])
-
-    # -------------------------------------------------------------------------
-    # TAB: ML LAB
-    # -------------------------------------------------------------------------
-    with action_tabs[0]:
-        st.subheader("ML Lab")
-        st.write(
-            "Trains a model to estimate whether a compound looks similar to past compounds labeled bubble = yes."
-        )
-        st.info("Use this as a hypothesis tool. It should not be treated as proof that a compound will work.")
-
-        ml_result = train_ml_model(described_df, use_phase=use_phase_in_ml)
-
-        if not ml_result.get("ok"):
-            st.warning(ml_result.get("message", "ML model could not be trained."))
+    map_cols = st.columns([1.2, 1])
+    with map_cols[0]:
+        st.pyplot(plot_heatmap(corr_view), use_container_width=True)
+    with map_cols[1]:
+        st.markdown("#### Reading it")
+        st.markdown("**+1** rise together · **0** no link · **-1** opposite. Correlation is not causation.")
+        rel = bubble_relationships(corr)
+        st.markdown("#### Strongest links to bubbling")
+        if rel.empty:
+            st.info("Not available yet.")
         else:
-            if ml_result.get("overfit_warning"):
-                st.warning(ml_result["overfit_warning"])
+            st.dataframe(rel.round(3), use_container_width=True, hide_index=True, height=280)
 
-            # Class balance — critical context for interpreting accuracy.
-            yes_count = ml_result["yes_count"]
-            no_count = ml_result["no_count"]
-            yes_rate = ml_result["yes_rate"]
-            baseline = ml_result["baseline_accuracy"]
-            rf_acc = ml_result["rf_accuracy"]
 
-            st.markdown("#### Dataset balance")
-            bal_cols = st.columns(3)
-            with bal_cols[0]:
-                st.metric("Bubble = yes", f"{yes_count:,}", help="Compounds where students observed bubbles.")
-            with bal_cols[1]:
-                st.metric("Bubble = no / maybe", f"{no_count:,}", help="Compounds where no bubbles were observed.")
-            with bal_cols[2]:
-                st.metric("Yes rate", f"{yes_rate:.0%}", help="Fraction of labeled compounds that bubbled.")
+def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame, use_phase_in_ml: bool) -> None:
+    """Tab 4 — train the bubble + purity models and predict a proposed compound."""
 
-            majority_label = "no/maybe" if yes_rate < 0.5 else "yes"
-            beat_baseline = rf_acc > baseline
-            baseline_note = (
-                f"A model that **always guesses '{majority_label}'** would get **{baseline:.0%}** accuracy. "
-                f"The Random Forest gets **{rf_acc:.0%}** — "
-                + ("**better than the baseline**, meaning it found a real signal." if beat_baseline
-                   else "**not better than the baseline**, meaning it has not found a useful signal yet.")
-            )
-            if beat_baseline:
-                st.success(baseline_note)
-            else:
-                st.warning(baseline_note)
+    st.caption("A hypothesis tool, not proof. Two models: one for bubbling, one for purity.")
 
-            st.markdown("#### Model performance")
-            ml_cols = st.columns(4)
-            with ml_cols[0]:
-                st.metric("RF accuracy", f"{rf_acc:.0%}",
-                          delta=f"{rf_acc - baseline:+.0%} vs baseline",
-                          help="Overall fraction of test compounds predicted correctly.")
-            with ml_cols[1]:
-                st.metric("LR accuracy", f"{ml_result['lr_accuracy']:.0%}",
-                          help="Simpler model — use as a sanity check.")
-            with ml_cols[2]:
-                st.metric("Precision (yes)", f"{ml_result['rf_precision']:.0%}",
-                          help="When the model predicts bubble=yes, how often it is actually right.")
-            with ml_cols[3]:
-                st.metric("Recall (yes)", f"{ml_result['rf_recall']:.0%}",
-                          help="Of all compounds that actually bubbled, how many the model correctly identified.")
+    ml_result = train_ml_model(described_df, use_phase=use_phase_in_ml)
+    if not ml_result.get("ok"):
+        st.warning(ml_result.get("message", "Bubble model could not be trained."))
+        return
 
-            with st.expander("How to read these numbers"):
-                st.markdown(
-                    f"""
-                    - **Accuracy** alone is misleading when bubble=yes is rare.
-                      The naive baseline ({baseline:.0%}) shows what you get for free just by guessing the majority class.
-                    - **Precision** answers: *"When the model says yes, should I believe it?"*
-                      {ml_result['rf_precision']:.0%} means roughly {ml_result['rf_precision']:.0%} of its yes predictions are correct.
-                    - **Recall** answers: *"Does the model catch most of the bubbling compounds?"*
-                      {ml_result['rf_recall']:.0%} means it identified {ml_result['rf_recall']:.0%} of the compounds that actually bubbled.
-                    - **Logistic Regression** is a simpler model used as a sanity check.
-                      If both models agree, the result is more trustworthy.
-                    """
-                )
+    if ml_result.get("overfit_warning"):
+        st.warning(ml_result["overfit_warning"])
 
-            st.markdown("#### What features did the model use most?")
-            importance = ml_result["importance"]
-            if importance.empty:
-                st.info("Feature importance is not available.")
-            else:
-                st.pyplot(
-                    plot_bar_chart(importance, "Feature", "Importance", "Top model features", "Importance"),
-                    use_container_width=True,
-                )
-                st.caption(
-                    "Higher importance means the model relied on that feature more often when making predictions."
-                )
+    # --- Bubble model: balance + headline metrics ---
+    baseline = ml_result["baseline_accuracy"]
+    rf_acc = ml_result["rf_accuracy"]
 
-            st.markdown("### Test a proposed compound")
-            st.write("Enter a compound below. The model will estimate the chance of `bubble = yes` based on past data.")
+    st.markdown("#### Bubble model")
+    bal_cols = st.columns(4)
+    with bal_cols[0]:
+        st.metric("Bubble = yes", f"{ml_result['yes_count']:,}")
+    with bal_cols[1]:
+        st.metric("No / maybe", f"{ml_result['no_count']:,}")
+    with bal_cols[2]:
+        st.metric("Accuracy", f"{rf_acc:.0%}", delta=f"{rf_acc - baseline:+.0%} vs baseline")
+    with bal_cols[3]:
+        st.metric("Precision / recall", f"{ml_result['rf_precision']:.0%} / {ml_result['rf_recall']:.0%}")
 
-            p1, p2, p3 = st.columns(3)
-            with p1:
-                pred_a = st.text_input("A-site element", value="La", key="pred_a")
-                pred_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
-            with p2:
-                pred_b = st.text_input("B-site element", value="Ni", key="pred_b")
-                pred_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
-            with p3:
-                pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
-                pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
+    beat = rf_acc > baseline
+    note = (f"Always-guess baseline is {baseline:.0%}; the model scores {rf_acc:.0%} — "
+            + ("found real signal." if beat else "no useful signal yet."))
+    (st.success if beat else st.warning)(note)
 
-            with st.expander("Mixed-site elements (advanced)"):
-                adv1, adv2, adv3 = st.columns(3)
-                with adv1:
-                    pred_ap = st.text_input("A′-site element", value="", key="pred_ap")
-                    pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
-                with adv2:
-                    pred_bp = st.text_input("B′-site element", value="", key="pred_bp")
-                    pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
-                with adv3:
-                    pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
-                    pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
-
-            if st.button("Predict bubble probability", type="primary"):
-                pred_row = make_single_prediction_row(
-                    atomic, en_table, pred_phase, pred_a, pred_an, pred_ap, pred_apn,
-                    pred_b, pred_bn, pred_bp, pred_bpn, pred_bdp, pred_bdpn, pred_on
-                )
-                pred_features = build_feature_matrix(
-                    pred_row,
-                    use_phase=use_phase_in_ml,
-                    expected_columns=ml_result["feature_columns"],
-                )
-                probability = ml_result["model"].predict_proba(pred_features)[0][1]
-                formula = pred_row.iloc[0]["Formula"]
-                st.success(f"Predicted bubble=yes probability for **{formula}**: **{probability:.1%}**")
-                st.dataframe(
-                    pred_row[[c for c in ordered_columns(pred_row) if c in pred_row.columns]],
-                    use_container_width=True,
-                )
-
-    # -------------------------------------------------------------------------
-    # TAB: ADD COMPOUND
-    # -------------------------------------------------------------------------
-    with action_tabs[1]:
-        st.subheader("Add Compound")
-        st.write(
-            "Enter a new compound one part at a time. The app rebuilds the formula and checks the entry."
+    with st.expander("What the numbers mean"):
+        st.markdown(
+            f"- **Accuracy** can mislead when yes is rare — compare to the {baseline:.0%} baseline.\n"
+            "- **Precision**: when it says yes, how often it's right.\n"
+            "- **Recall**: of all real bubblers, how many it caught.\n"
+            "- **LR accuracy** "
+            f"({ml_result['lr_accuracy']:.0%}) is a simpler sanity-check model."
         )
 
-        with st.form("add_compound_form"):
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                new_group = st.text_input("Group Number / ID", value="New Group", key="add_group")
-                new_semester = st.text_input("Semester / Year", value="Spring 2026", key="add_semester")
-            with m2:
-                new_instructor = st.text_input("Instructor / Section", value="", key="add_instructor")
-                new_phase = st.selectbox("Phase", ["pure", "impure"], key="add_phase")
-            with m3:
-                new_bub = st.selectbox("Bubble response", ["yes", "no", "maybe"], key="add_bub")
+    importance = ml_result["importance"]
+    if not importance.empty:
+        st.markdown("**Top features used**")
+        st.pyplot(plot_bar_chart(importance, "Feature", "Importance", "Top model features", "Importance"),
+                  use_container_width=True)
 
-            st.markdown("#### Formula parts")
-            a_col, b_col, o_col = st.columns(3)
-            with a_col:
-                new_a = st.text_input("A-site element", value="La", key="add_a")
-                new_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="add_an")
-                new_ap = st.text_input("A′-site element", value="", key="add_ap")
-                new_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_apn")
-            with b_col:
-                new_b = st.text_input("B-site element", value="Ni", key="add_b")
-                new_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="add_bn")
-                new_bp = st.text_input("B′-site element", value="", key="add_bp")
-                new_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bpn")
-            with o_col:
-                new_bdp = st.text_input("B″-site element", value="", key="add_bdp")
-                new_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bdpn")
-                new_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="add_on")
+    # --- Purity model: never sees the phase label as input ---
+    st.markdown("#### Purity model")
+    purity_result = train_purity_model(described_df)
+    if not purity_result.get("ok"):
+        st.info(purity_result.get("message", "Purity model not available yet."))
+    else:
+        if purity_result.get("overfit_warning"):
+            st.warning(purity_result["overfit_warning"])
+        p = st.columns(4)
+        with p[0]:
+            st.metric("Pure examples", f"{purity_result['pure_count']:,}")
+        with p[1]:
+            st.metric("Not-pure examples", f"{purity_result['impure_count']:,}")
+        with p[2]:
+            st.metric("Accuracy", f"{purity_result['accuracy']:.0%}",
+                      delta=f"{purity_result['accuracy'] - purity_result['baseline_accuracy']:+.0%} vs baseline")
+        with p[3]:
+            st.metric("Precision (pure)", f"{purity_result['precision']:.0%}")
+        st.caption("Predicts purity from composition only — the phase label is never an input.")
 
-            submitted = st.form_submit_button("Build and check compound", type="primary")
+    # --- Predict a proposed compound (bubble + purity together) ---
+    st.markdown("#### Test a proposed compound")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        pred_a = st.text_input("A-site element", value="La", key="pred_a")
+        pred_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
+    with p2:
+        pred_b = st.text_input("B-site element", value="Ni", key="pred_b")
+        pred_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
+    with p3:
+        pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
+        pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
 
-        if submitted:
-            new_raw = pd.DataFrame(
-                [
-                    {
-                        "GroupNumber": new_group,
-                        "Email": "",
-                        "Name": "",
-                        "Members": "",
-                        "Instructor": new_instructor,
-                        "Semester": new_semester,
-                        "SourceRow": "manual",
-                        "Slot": 1,
-                        "FormulaRef": "",
-                        "A": new_a,
-                        "AN": new_an,
-                        "AP": new_ap,
-                        "APN": new_apn,
-                        "B": new_b,
-                        "BN": new_bn,
-                        "BP": new_bp,
-                        "BPN": new_bpn,
-                        "BDP": new_bdp,
-                        "BDPN": new_bdpn,
-                        "O": "O",
-                        "ON": new_on,
-                        "P": new_phase,
-                        "Bub": new_bub,
-                    }
-                ]
-            )
-            new_clean = clean_and_encode_data(new_raw, atomic)
-            new_desc = add_chemical_descriptors(new_clean, atomic, en_table)
-            new_issues = validate_compound_rows(new_desc, atomic)
-            st.session_state.pending_manual_entry = new_desc
-            st.session_state.pending_manual_issues = new_issues
+    with st.expander("Mixed-site elements (advanced)"):
+        adv1, adv2, adv3 = st.columns(3)
+        with adv1:
+            pred_ap = st.text_input("A′-site element", value="", key="pred_ap")
+            pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
+        with adv2:
+            pred_bp = st.text_input("B′-site element", value="", key="pred_bp")
+            pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
+        with adv3:
+            pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
+            pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
-        if not st.session_state.pending_manual_entry.empty:
-            pending = st.session_state.pending_manual_entry
-            pending_issues = st.session_state.pending_manual_issues
-            formula = pending.iloc[0]["Formula"]
+    if st.button("Predict bubble & purity", type="primary"):
+        pred_row = make_single_prediction_row(
+            atomic, en_table, pred_phase, pred_a, pred_an, pred_ap, pred_apn,
+            pred_b, pred_bn, pred_bp, pred_bpn, pred_bdp, pred_bdpn, pred_on,
+        )
+        formula = pred_row.iloc[0]["Formula"]
 
-            st.markdown(f"### Preview: `{formula}`")
+        bubble_features = build_feature_matrix(
+            pred_row, use_phase=use_phase_in_ml, expected_columns=ml_result["feature_columns"])
+        bubble_prob = ml_result["model"].predict_proba(bubble_features)[0][1]
 
-            if pending_issues.empty:
-                st.success("This entry passed validation.")
+        out_cols = st.columns(2)
+        with out_cols[0]:
+            st.metric(f"Will it bubble?  ({formula})", f"{bubble_prob:.0%}")
+        with out_cols[1]:
+            if purity_result.get("ok"):
+                purity_features = build_feature_matrix(
+                    pred_row, use_phase=False, expected_columns=purity_result["feature_columns"])
+                pure_prob = purity_result["model"].predict_proba(purity_features)[0][1]
+                st.metric("Will it be pure?", f"{pure_prob:.0%}")
             else:
-                st.warning("This entry has issues to review before adding.")
-                st.dataframe(pending_issues, use_container_width=True)
+                st.metric("Will it be pure?", "n/a")
 
-            st.dataframe(pending[ordered_columns(pending)], use_container_width=True)
+        st.caption("Hypotheses from past class data — not guarantees.")
+        st.dataframe(pred_row[[c for c in ordered_columns(pred_row) if c in pred_row.columns]],
+                     use_container_width=True)
 
-            add_cols = st.columns([1, 1, 2])
-            with add_cols[0]:
-                if st.button("Add to session dataset", type="primary", key="confirm_add_manual_entry"):
-                    st.session_state.manual_entries = pd.concat(
-                        [st.session_state.manual_entries, pending],
-                        ignore_index=True,
-                    )
-                    st.session_state.pending_manual_entry = pd.DataFrame()
-                    st.session_state.pending_manual_issues = pd.DataFrame()
-                    st.success("Added to this session. Go to Export to download the updated data.")
-                    st.rerun()
-            with add_cols[1]:
-                if st.button("Discard preview", key="discard_manual_preview"):
-                    st.session_state.pending_manual_entry = pd.DataFrame()
-                    st.session_state.pending_manual_issues = pd.DataFrame()
-                    st.rerun()
-            with add_cols[2]:
-                st.download_button(
-                    "Download this single entry as CSV",
-                    dataframe_to_csv_bytes(pending),
-                    file_name=f"{formula or 'new_compound'}_entry.csv",
-                    mime="text/csv",
-                    key="download_single_pending",
-                )
 
-        if not st.session_state.manual_entries.empty:
-            st.markdown("#### Entries added during this session")
-            st.dataframe(st.session_state.manual_entries[ordered_columns(st.session_state.manual_entries)], use_container_width=True)
-            if st.button("Clear session-added entries", key="clear_session_entries"):
-                st.session_state.manual_entries = pd.DataFrame()
+def render_add_compound_tab(atomic: pd.DataFrame, en_table: pd.DataFrame) -> None:
+    """Tab 5 — build and stage a new compound by hand for this session."""
+
+    st.caption("Enter one compound part by part. The app rebuilds the formula and checks it.")
+
+    with st.form("add_compound_form"):
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            new_group = st.text_input("Group Number / ID", value="New Group", key="add_group")
+            new_semester = st.text_input("Semester / Year", value="Spring 2026", key="add_semester")
+        with m2:
+            new_instructor = st.text_input("Instructor / Section", value="", key="add_instructor")
+            new_phase = st.selectbox("Phase", ["pure", "impure"], key="add_phase")
+        with m3:
+            new_bub = st.selectbox("Bubble response", ["yes", "no", "maybe"], key="add_bub")
+
+        st.markdown("#### Formula parts")
+        a_col, b_col, o_col = st.columns(3)
+        with a_col:
+            new_a = st.text_input("A-site element", value="La", key="add_a")
+            new_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="add_an")
+            new_ap = st.text_input("A′-site element", value="", key="add_ap")
+            new_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_apn")
+        with b_col:
+            new_b = st.text_input("B-site element", value="Ni", key="add_b")
+            new_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="add_bn")
+            new_bp = st.text_input("B′-site element", value="", key="add_bp")
+            new_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bpn")
+        with o_col:
+            new_bdp = st.text_input("B″-site element", value="", key="add_bdp")
+            new_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bdpn")
+            new_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="add_on")
+
+        submitted = st.form_submit_button("Build and check compound", type="primary")
+
+    if submitted:
+        new_raw = pd.DataFrame([{
+            "GroupNumber": new_group, "Email": "", "Name": "", "Members": "",
+            "Instructor": new_instructor, "Semester": new_semester, "SourceRow": "manual",
+            "Slot": 1, "FormulaRef": "",
+            "A": new_a, "AN": new_an, "AP": new_ap, "APN": new_apn,
+            "B": new_b, "BN": new_bn, "BP": new_bp, "BPN": new_bpn,
+            "BDP": new_bdp, "BDPN": new_bdpn, "O": "O", "ON": new_on,
+            "P": new_phase, "Bub": new_bub,
+        }])
+        new_clean = clean_and_encode_data(new_raw, atomic)
+        new_desc = add_chemical_descriptors(new_clean, atomic, en_table)
+        st.session_state.pending_manual_entry = new_desc
+        st.session_state.pending_manual_issues = validate_compound_rows(new_desc, atomic)
+
+    # Preview the staged (not yet added) entry.
+    if not st.session_state.pending_manual_entry.empty:
+        pending = st.session_state.pending_manual_entry
+        pending_issues = st.session_state.pending_manual_issues
+        formula = pending.iloc[0]["Formula"]
+
+        st.markdown(f"#### Preview: `{formula}`")
+        if pending_issues.empty:
+            st.success("This entry passed validation.")
+        else:
+            st.warning("This entry has issues to review before adding.")
+            st.dataframe(pending_issues, use_container_width=True)
+        st.dataframe(pending[ordered_columns(pending)], use_container_width=True)
+
+        add_cols = st.columns([1, 1, 2])
+        with add_cols[0]:
+            if st.button("Add to session dataset", type="primary", key="confirm_add_manual_entry"):
+                st.session_state.manual_entries = pd.concat(
+                    [st.session_state.manual_entries, pending], ignore_index=True)
+                st.session_state.pending_manual_entry = pd.DataFrame()
+                st.session_state.pending_manual_issues = pd.DataFrame()
+                st.success("Added. See Export to download the updated data.")
                 st.rerun()
+        with add_cols[1]:
+            if st.button("Discard preview", key="discard_manual_preview"):
+                st.session_state.pending_manual_entry = pd.DataFrame()
+                st.session_state.pending_manual_issues = pd.DataFrame()
+                st.rerun()
+        with add_cols[2]:
+            st.download_button("Download this entry as CSV", dataframe_to_csv_bytes(pending),
+                               file_name=f"{formula or 'new_compound'}_entry.csv",
+                               mime="text/csv", key="download_single_pending")
 
-    # -------------------------------------------------------------------------
-    # TAB: EXPORT
-    # -------------------------------------------------------------------------
-    with action_tabs[2]:
-        st.subheader("Export")
-        st.write("Download cleaned results, validation reports, and analysis-ready data.")
+    # Entries already added this session.
+    if not st.session_state.manual_entries.empty:
+        st.markdown("#### Added this session")
+        st.dataframe(st.session_state.manual_entries[ordered_columns(st.session_state.manual_entries)],
+                     use_container_width=True)
+        if st.button("Clear session-added entries", key="clear_session_entries"):
+            st.session_state.manual_entries = pd.DataFrame()
+            st.rerun()
 
-        export_cols = st.columns(2)
-        with export_cols[0]:
-            st.markdown("#### Cleaned data")
-            st.download_button(
-                "Download cleaned data as CSV",
-                dataframe_to_csv_bytes(described_df[ordered_columns(described_df)]),
-                file_name="chem120_cleaned_compound_data.csv",
-                mime="text/csv",
-            )
-            st.download_button(
-                "Download cleaned data as Excel",
-                dataframe_to_excel_bytes(described_df[ordered_columns(described_df)], "Cleaned_Data"),
-                file_name="chem120_cleaned_compound_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
 
-        with export_cols[1]:
-            st.markdown("#### Reports")
-            st.download_button(
-                "Download validation report",
-                dataframe_to_csv_bytes(issues_df),
-                file_name="chem120_validation_report.csv",
-                mime="text/csv",
-            )
-            st.download_button(
-                "Download outlier report",
-                dataframe_to_csv_bytes(outlier_df),
-                file_name="chem120_outlier_report.csv",
-                mime="text/csv",
-            )
+def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outlier_df: pd.DataFrame) -> None:
+    """Tab 6 — download cleaned data and reports. Originals are never overwritten."""
 
-        st.markdown("### What should I save?")
+    st.caption("Download analysis-ready data and reports. Your original file is never changed.")
+
+    export_cols = st.columns(2)
+    with export_cols[0]:
+        st.markdown("#### Cleaned data")
+        st.download_button("Cleaned data (CSV)",
+                           dataframe_to_csv_bytes(described_df[ordered_columns(described_df)]),
+                           file_name="chem120_cleaned_compound_data.csv", mime="text/csv")
+        st.download_button("Cleaned data (Excel)",
+                           dataframe_to_excel_bytes(described_df[ordered_columns(described_df)], "Cleaned_Data"),
+                           file_name="chem120_cleaned_compound_data.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with export_cols[1]:
+        st.markdown("#### Reports")
+        st.download_button("Validation report (CSV)", dataframe_to_csv_bytes(issues_df),
+                           file_name="chem120_validation_report.csv", mime="text/csv")
+        st.download_button("Outlier report (CSV)", dataframe_to_csv_bytes(outlier_df),
+                           file_name="chem120_outlier_report.csv", mime="text/csv")
+
+
+def render_new_semester_tab(long_df: pd.DataFrame) -> None:
+    """Tab 7 — merge a new semester's raw export into the current dataset."""
+
+    st.caption("Upload a new semester's raw Excel; the app expands it to one row per compound and merges it.")
+
+    new_sem_file = st.file_uploader(
+        "New Semester Excel file", type=["xlsx", "xlsm", "xls"],
+        help="Raw export where each row is one group and compounds are in columns like 1A, 1AN, 2A, 2AN…",
+        key="new_semester_upload",
+    )
+    if new_sem_file is None:
+        st.info("Upload the new semester file to get started.")
+        return
+
+    try:
+        new_raw = read_table_from_bytes(new_sem_file.getvalue(), new_sem_file.name)
+    except Exception as exc:
+        st.error(f"Could not read file: {exc}")
+        return
+
+    new_long, new_warnings = normalize_to_long_format(new_raw)
+    if new_warnings:
+        with st.expander("⚠️ Column mapping problems in new file", expanded=True):
+            st.warning("Some required columns could not be matched. Check column names (1A, 1AN, 1B, 1BN…). "
+                       "See DEVELOPER_NOTES.md.")
+            for w in new_warnings:
+                st.markdown(f"- {w}")
+
+    if new_long.empty:
+        st.error("No compound rows could be extracted. Check the column names.")
+        return
+
+    stat_cols = st.columns(3)
+    with stat_cols[0]:
+        st.metric("Groups in new file", f"{len(new_raw):,}")
+    with stat_cols[1]:
+        st.metric("Compound rows extracted", f"{len(new_long):,}")
+    with stat_cols[2]:
+        st.metric("Existing compound rows", f"{len(long_df):,}")
+
+    st.markdown("#### Preview — first 10 new rows")
+    preview_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "B", "BN", "O", "ON", "P", "Bub"] if c in new_long.columns]
+    st.dataframe(new_long[preview_cols].head(10), use_container_width=True)
+
+    # Warn if a semester already exists in the current data (possible duplicate).
+    existing_semesters = set(long_df["Semester"].dropna().astype(str).unique())
+    new_semesters = set(new_long["Semester"].dropna().astype(str).unique())
+    overlap = existing_semesters & new_semesters
+    if overlap:
+        st.warning(f"New file contains semester(s) already present: **{', '.join(sorted(overlap))}**. "
+                   "Check for duplicate data.")
+    else:
+        st.success(f"No semester overlap. New semesters: **{', '.join(sorted(new_semesters)) or 'unknown'}**")
+
+    merged = pd.concat([long_df, new_long], ignore_index=True)
+    st.markdown(f"#### Merged dataset — {len(merged):,} total rows")
+    st.download_button("⬇️ Download merged Combined_Data.xlsx",
+                       dataframe_to_excel_bytes(merged, "Combined_Data"),
+                       file_name="Combined_Data_merged.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       type="primary")
+    st.caption("Replace data/Combined_Data.xlsx with this file to load the merged dataset next startup.")
+
+
+# =============================================================================
+# STREAMLIT APP
+# =============================================================================
+
+def main() -> None:
+    """Load data, then render every part as a tab."""
+
+    st.set_page_config(page_title=APP_TITLE, page_icon="🧪", layout="wide",
+                       initial_sidebar_state="expanded")
+    inject_css()
+
+    # ----- Sidebar: data source + controls -----
+    st.sidebar.markdown("## 🧪 CHEM 120")
+    st.sidebar.caption("Upload class data, check it, then explore patterns.")
+
+    st.sidebar.markdown("### 1. Data")
+    uploaded_data = st.sidebar.file_uploader(
+        "Class spreadsheet", type=["csv", "xlsx", "xlsm", "xls"],
+        help="Upload Combined_Data.xlsx or another CHEM 120 survey/database file.",
+    )
+    uploaded_atomic = None
+    uploaded_en = None
+
+    # The app boots empty. Tick this to explore the bundled sample without uploading.
+    use_sample_data = st.sidebar.checkbox(
+        "Use sample class data instead", value=False,
+        help="Loads the example dataset shipped with the app so you can try the features without uploading.",
+    )
+
+    st.sidebar.markdown("### 2. Controls")
+    z_threshold = st.sidebar.slider(
+        "Outlier sensitivity", min_value=2.0, max_value=5.0, value=3.0, step=0.25,
+        help="Lower flags more possible outliers; higher flags only extreme values.",
+    )
+    use_phase_in_ml = st.sidebar.toggle(
+        "Use phase in bubble model", value=True,
+        help="Turn off to make the bubble model ignore pure/impure labels.",
+    )
+
+    # ----- Hero header -----
+    st.markdown(
+        f"""
+        <div class="hero">
+            <div class="hero-title">{APP_TITLE}</div>
+            <div class="hero-subtitle">{APP_SUBTITLE}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ----- Reference tables (atomic mass, optional electronegativity) -----
+    try:
+        atomic = load_atomic_table_from_bytes(
+            uploaded_atomic.getvalue() if uploaded_atomic else None,
+            uploaded_atomic.name if uploaded_atomic else "")
+        en_table = load_en_table_from_bytes(
+            uploaded_en.getvalue() if uploaded_en else None,
+            uploaded_en.name if uploaded_en else "")
+    except Exception as exc:
+        st.error(f"Reference table error: {exc}")
+        st.stop()
+
+    # ----- Blank boot: nothing loads until upload or sample is chosen -----
+    if uploaded_data is None and not use_sample_data:
         st.markdown(
             """
-            - **Cleaned data** — analysis-ready version of the class database.
-            - **Validation report** — use this to correct student-entry mistakes.
-            - **Outlier report** — use this to double-check unusual values.
-            - The app never overwrites your original file.
-            """
+            <div class="soft-card" style="text-align:center; padding:2.4rem 1.6rem;">
+                <div class="big-number">Upload your class data to begin</div>
+                <div class="helper-text" style="margin-top:0.6rem;">
+                    Use <b>1. Data</b> in the sidebar to add a CHEM 120 spreadsheet (CSV or Excel).
+                    No file handy? Tick <b>“Use sample class data instead”</b> to explore the example dataset.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
+        st.stop()
 
-    # -------------------------------------------------------------------------
-    # TAB: NEW SEMESTER
-    # -------------------------------------------------------------------------
-    with action_tabs[3]:
-        st.subheader("Prepare New Semester Data")
-        st.write(
-            "Upload a new semester's raw Excel file. The app will split each group's "
-            "row into one row per compound, then merge it with the current dataset so "
-            "you can download one combined file."
-        )
-
-        new_sem_file = st.file_uploader(
-            "New semester Excel file",
-            type=["xlsx", "xlsm", "xls"],
-            help="The raw export where each row is one group and compounds are in columns like 1A, 1AN, 2A, 2AN…",
-            key="new_semester_upload",
-        )
-
-        if new_sem_file is None:
-            st.info("Upload the new semester file above to get started.")
+    # ----- Load the class data (uploaded file wins over the sample) -----
+    try:
+        if uploaded_data is not None:
+            raw_df = read_table_from_bytes(uploaded_data.getvalue(), uploaded_data.name)
         else:
-            try:
-                new_raw = read_table_from_bytes(new_sem_file.getvalue(), new_sem_file.name)
-            except Exception as exc:
-                st.error(f"Could not read file: {exc}")
-                st.stop()
+            default_path = find_default_database()
+            raw_df = read_local_table(str(default_path)) if default_path is not None else make_demo_dataset()
+    except Exception as exc:
+        st.error(f"Could not load class data: {exc}")
+        st.stop()
 
-            new_long, new_warnings = normalize_to_long_format(new_raw)
+    # ----- Run the data pipeline (each step is cached for speed) -----
+    long_df, column_warnings = normalize_to_long_format(raw_df)
+    if column_warnings:
+        with st.expander("⚠️ Column mapping problems — expand for details", expanded=True):
+            st.warning("One or more required columns could not be matched — usually the form wording changed. "
+                       "See DEVELOPER_NOTES.md → When the Google Form changes.")
+            for w in column_warnings:
+                st.markdown(f"- {w}")
 
-            if new_warnings:
-                with st.expander("⚠️ Column mapping problems in new file", expanded=True):
-                    st.warning(
-                        "Some required columns could not be matched. "
-                        "Check that the column names follow the expected pattern (1A, 1AN, 1B, 1BN…). "
-                        "See DEVELOPER_NOTES.md for fix instructions."
-                    )
-                    for w in new_warnings:
-                        st.markdown(f"- {w}")
+    clean_df = clean_and_encode_data(long_df, atomic)
+    described_df = add_chemical_descriptors(clean_df, atomic, en_table)
 
-            if new_long.empty:
-                st.error("No compound rows could be extracted from the uploaded file. Check the column names.")
-            else:
-                # Preview stats
-                stat_cols = st.columns(3)
-                with stat_cols[0]:
-                    st.metric("Groups in new file", f"{len(new_raw):,}")
-                with stat_cols[1]:
-                    st.metric("Compound rows extracted", f"{len(new_long):,}")
-                with stat_cols[2]:
-                    st.metric("Existing compound rows", f"{len(long_df):,}")
+    # Session-staged manual rows (from the Add Compound tab).
+    st.session_state.setdefault("manual_entries", pd.DataFrame())
+    st.session_state.setdefault("pending_manual_entry", pd.DataFrame())
+    st.session_state.setdefault("pending_manual_issues", pd.DataFrame())
+    if not st.session_state.manual_entries.empty:
+        described_df = pd.concat([described_df, st.session_state.manual_entries], ignore_index=True)
 
-                st.markdown("#### Preview — first 10 rows from new semester")
-                preview_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "B", "BN", "O", "ON", "P", "Bub"] if c in new_long.columns]
-                st.dataframe(new_long[preview_cols].head(10), use_container_width=True)
+    issues_df = validate_compound_rows(described_df, atomic)
+    outlier_df = detect_numeric_outliers(described_df, z_threshold=z_threshold)
 
-                # Check for semester overlap
-                existing_semesters = set(long_df["Semester"].dropna().astype(str).unique())
-                new_semesters = set(new_long["Semester"].dropna().astype(str).unique())
-                overlap = existing_semesters & new_semesters
-                if overlap:
-                    st.warning(
-                        f"The new file contains semester(s) already in the existing dataset: "
-                        f"**{', '.join(sorted(overlap))}**. "
-                        "Check that you are not adding duplicate data."
-                    )
-                else:
-                    st.success(f"No semester overlap detected. New semesters: **{', '.join(sorted(new_semesters)) or 'unknown'}**")
+    # ----- Two compact health cards above the tabs -----
+    health_cols = st.columns(2)
+    with health_cols[0]:
+        style = "status-ok" if len(described_df) > 0 else "status-bad"
+        st.markdown(f"""<div class="soft-card {style}"><b>Loaded compounds</b><br>
+            <span class="helper-text">{len(described_df):,} rows ready for analysis.</span></div>""",
+            unsafe_allow_html=True)
+    with health_cols[1]:
+        style = "status-ok" if len(issues_df) == 0 else "status-warn"
+        st.markdown(f"""<div class="soft-card {style}"><b>Validation report</b><br>
+            <span class="helper-text">{len(issues_df):,} possible data-entry issues. See the Check tab.</span></div>""",
+            unsafe_allow_html=True)
 
-                merged = pd.concat([long_df, new_long], ignore_index=True)
-
-                st.markdown(f"#### Merged dataset — {len(merged):,} total compound rows")
-
-                dl_bytes = dataframe_to_excel_bytes(merged, "Combined_Data")
-                st.download_button(
-                    "⬇️ Download merged Combined_Data.xlsx",
-                    dl_bytes,
-                    file_name="Combined_Data_merged.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                )
-                st.caption(
-                    "Replace your existing data/Combined_Data.xlsx with this file "
-                    "and the app will load the full merged dataset on next startup."
-                )
+    # ----- Everything lives in tabs (no long scroll) -----
+    tab_check, tab_explore, tab_heatmap, tab_ml, tab_add, tab_export, tab_semester = st.tabs(
+        ["✅ Check", "📊 Explore", "🔥 Heatmap", "🔮 Predict", "➕ Add", "⬇️ Export", "🔄 New Semester"]
+    )
+    with tab_check:
+        render_check_tab(described_df, issues_df, outlier_df)
+    with tab_explore:
+        render_explore_tab(described_df)
+    with tab_heatmap:
+        render_heatmap_tab(described_df)
+    with tab_ml:
+        render_ml_tab(described_df, atomic, en_table, use_phase_in_ml)
+    with tab_add:
+        render_add_compound_tab(atomic, en_table)
+    with tab_export:
+        render_export_tab(described_df, issues_df, outlier_df)
+    with tab_semester:
+        render_new_semester_tab(long_df)
 
 
 if __name__ == "__main__":

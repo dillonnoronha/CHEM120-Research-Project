@@ -77,6 +77,16 @@ COMPOUND_SLOTS = [1, 2, 3, 4]
 PHASE_MAP = {"not made": 0, "impure": 1, "pure": 2}
 BUBBLE_MAP = {"maybe": 0, "yes": 1, "no": 2}
 
+# Placeholder words students/templates type into an OPTIONAL element field to
+# mean "there is no element here". Without this list these phrases leak into the
+# reconstructed formula (e.g. "La2CoNo B' elementO4") or, worse, get silently
+# read as a real symbol ("NO" -> Nobelium). They are normalized to blank.
+# NOTE: "na" is deliberately NOT a marker because Na = sodium is a real element.
+EMPTY_MARKERS = {
+    "none", "nil", "null", "blank", "empty", "nan", "nothing", "no", "x", "n",
+    "noelement", "noprime", "notapplicable", "doesnotapply",
+}
+
 # Optional element/ratio fields used for mixed A-site and B-site compounds.
 A_SITE_FIELDS = [("A", "AN"), ("AP", "APN")]
 B_SITE_FIELDS = [("B", "BN"), ("BP", "BPN"), ("BDP", "BDPN")]
@@ -433,6 +443,10 @@ def clean_symbol(value: object, name_to_symbol: Dict[str, str]) -> str:
     if not text:
         return ""
 
+    # Treat "no element" placeholders as blank so they never reach the formula.
+    if is_placeholder_symbol(text):
+        return ""
+
     lower = text.lower()
     if lower in name_to_symbol:
         return name_to_symbol[lower]
@@ -443,6 +457,30 @@ def clean_symbol(value: object, name_to_symbol: Dict[str, str]) -> str:
 
     # Leave unknown text visible so validation can flag it.
     return text
+
+
+def is_placeholder_symbol(value: object) -> bool:
+    """
+    Return True when an element cell is really a "no element here" placeholder.
+
+    Catches bare markers (none, nil, "NO", x), "no ... element" phrases such as
+    "No B' element", and any multi-word/punctuated entry (no real element symbol
+    contains a space or apostrophe). "Na"/"na" is preserved as sodium.
+    """
+
+    raw = clean_text(value)
+    if not raw:
+        return True
+
+    key = normalize_key(raw)
+    if key in EMPTY_MARKERS:
+        return True
+    if key.startswith("no") and "element" in key:
+        return True
+    # No periodic-table symbol contains a space or apostrophe.
+    if " " in raw or "'" in raw or "/" in raw:
+        return True
+    return False
 
 
 # =============================================================================
@@ -1198,6 +1236,32 @@ def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_ta
     df["Mixed_A_site"] = (df["AP"].astype(str).str.len() > 0).astype(int)
     df["Mixed_B_site"] = ((df["BP"].astype(str).str.len() > 0) | (df["BDP"].astype(str).str.len() > 0)).astype(int)
 
+    # ----- Added descriptors (#12) -------------------------------------------
+    # Contrast between the A and B sites, captured as plain numbers.
+    df["A_B_Z_diff"] = df["A_avg_Z"] - df["B_avg_Z"]
+    df["A_B_mass_diff"] = df["A_avg_mass"] - df["B_avg_mass"]
+
+    # Whole-compound averages, ratio-weighted across both cation sites.
+    cation_ratio_total = (df["A_total_ratio"] + df["B_total_ratio"]).replace({0: np.nan})
+    df["Avg_cation_Z"] = (
+        df["A_avg_Z"] * df["A_total_ratio"] + df["B_avg_Z"] * df["B_total_ratio"]
+    ) / cation_ratio_total
+    df["Avg_cation_mass"] = (
+        df["A_avg_mass"] * df["A_total_ratio"] + df["B_avg_mass"] * df["B_total_ratio"]
+    ) / cation_ratio_total
+
+    # How many distinct elements occupy each site (1 = simple, 2+ = doped/mixed).
+    df["N_A_elements"] = (
+        (df["A"].astype(str).str.len() > 0).astype(int)
+        + (df["AP"].astype(str).str.len() > 0).astype(int)
+    )
+    df["N_B_elements"] = (
+        (df["B"].astype(str).str.len() > 0).astype(int)
+        + (df["BP"].astype(str).str.len() > 0).astype(int)
+        + (df["BDP"].astype(str).str.len() > 0).astype(int)
+    )
+    df["Cation_count"] = df["N_A_elements"] + df["N_B_elements"]
+
     return df
 
 
@@ -1235,17 +1299,66 @@ def summarize_by_element(df: pd.DataFrame, element_col: str, min_rows: int = 1) 
     return summary.sort_values(["bubble_yes_rate", "compounds"], ascending=[False, False])
 
 
+def label_count_table(
+    df: pd.DataFrame,
+    column: str,
+    kind: str = "auto",
+    preferred_order: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """
+    Return bubble/phase response counts as a TABLE (not a chart).
+
+    Replaces the old distribution bar charts (#16). Output columns:
+        Response | Count | Percent
+    Percent is share of all compounds, formatted as a string like "42.1%".
+    """
+
+    if column not in df.columns or df.empty:
+        return pd.DataFrame(columns=["Response", "Count", "Percent"])
+
+    series = df[column].copy()
+    if kind == "phase":
+        series = series.apply(lambda v: display_label(normalize_phase_label(v)))
+    elif kind == "bubble":
+        series = series.apply(lambda v: display_label(normalize_bubble_label(v)))
+    else:
+        series = series.apply(display_label)
+
+    counts = series.replace("", "Missing").fillna("Missing").astype(str).value_counts()
+
+    if preferred_order:
+        ordered = [lbl for lbl in preferred_order if lbl in counts.index]
+        extra = sorted([lbl for lbl in counts.index if lbl not in ordered])
+        counts = counts.reindex(ordered + extra)
+
+    total = int(counts.sum()) or 1
+    out = counts.reset_index()
+    out.columns = ["Response", "Count"]
+    out["Count"] = out["Count"].astype(int)
+    out["Percent"] = (out["Count"] / total * 100).map(lambda x: f"{x:.1f}%")
+    return out
+
+
 def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str):
-    """Return a clean matplotlib bar chart."""
+    """Return a clean matplotlib bar chart with readable, angled tick labels."""
 
     fig, ax = plt.subplots(figsize=(8, 4.2))
     plot_data = data[[x_col, y_col]].dropna().head(12)
-    ax.bar(plot_data[x_col].astype(str), plot_data[y_col])
+    ax.bar(plot_data[x_col].astype(str), plot_data[y_col], color="#0071e3")
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_ylabel(ylabel)
     ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=35)
+
+    # Label angle fix (#6/#9): rotate to 30 degrees and right-anchor so long
+    # feature names line up under their bars instead of overlapping.
+    labels = ax.get_xticklabels()
+    n_labels = len(plot_data)
+    rotation = 0 if n_labels <= 4 else 30
+    ax.set_xticklabels(labels, rotation=rotation, ha="right" if rotation else "center",
+                       rotation_mode="anchor", fontsize=9)
     ax.grid(axis="y", alpha=0.25)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
     fig.tight_layout()
     return fig
 
@@ -1338,6 +1451,8 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
         "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
         "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
         "Mixed_A_site", "Mixed_B_site",
+        "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
+        "Cation_count", "N_B_elements",
     ]
     candidates += [c for c in ["A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A"] if c in df.columns]
 
@@ -1351,26 +1466,63 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
     return numeric.corr(numeric_only=True)
 
 
+def friendly_label(name: str) -> str:
+    """Turn an internal column name into a short human-readable heatmap label."""
+
+    pretty = {
+        "BubbleYes": "Bubbles (yes)",
+        "BubN": "Bubble code",
+        "PhaseN": "Phase (pure=2)",
+        "AN": "A ratio", "BN": "B ratio", "ON": "O ratio",
+        "APN": "A' ratio", "BPN": "B' ratio", "BDPN": "B'' ratio",
+        "A_avg_Z": "A atomic #", "B_avg_Z": "B atomic #",
+        "A_avg_mass": "A mass", "B_avg_mass": "B mass",
+        "FormulaMass": "Formula mass",
+        "O_to_cation_ratio": "O : cation", "B_to_A_ratio": "B : A",
+        "Mixed_A_site": "Mixed A", "Mixed_B_site": "Mixed B",
+        "A_B_Z_diff": "A-B atomic #", "A_B_mass_diff": "A-B mass",
+        "Avg_cation_Z": "Avg cation #", "Avg_cation_mass": "Avg cation mass",
+        "Cation_count": "# cations", "N_B_elements": "# B elements",
+    }
+    return pretty.get(name, name)
+
+
 def plot_heatmap(corr: pd.DataFrame):
     """Return a beginner-friendly correlation heatmap figure."""
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
-    ax.set_xticks(range(len(corr.columns)))
-    ax.set_xticklabels(corr.columns, rotation=45, ha="right", fontsize=8)
+    n = len(corr.columns)
+    size = max(6.0, min(13.0, 0.7 * n + 2.5))
+    fig, ax = plt.subplots(figsize=(size, size * 0.82))
+    im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="RdBu_r")
+
+    labels = [friendly_label(c) for c in corr.columns]
+    ax.set_xticks(range(n))
+    # Label angle fix (#6/#9): 40-degree right-anchored labels read cleanly.
+    ax.set_xticklabels(labels, rotation=40, ha="right", rotation_mode="anchor", fontsize=9)
     ax.set_yticks(range(len(corr.index)))
-    ax.set_yticklabels(corr.index, fontsize=8)
+    ax.set_yticklabels([friendly_label(c) for c in corr.index], fontsize=9)
+
+    # Light gridlines between cells for a cleaner, modern look.
+    ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(corr.index), 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=1.5)
+    ax.tick_params(which="minor", length=0)
 
     # Annotate cells only when the matrix is reasonably small.
-    if corr.shape[0] <= 14:
+    if n <= 16:
         for i in range(corr.shape[0]):
             for j in range(corr.shape[1]):
                 value = corr.iloc[i, j]
                 if not np.isnan(value):
-                    ax.text(j, i, f"{value:.2f}", ha="center", va="center", fontsize=7)
+                    ax.text(
+                        j, i, f"{value:.2f}", ha="center", va="center",
+                        fontsize=7.5,
+                        color="white" if abs(value) > 0.55 else "#1d1d1f",
+                    )
 
-    ax.set_title("Relationship Map: numeric features compared with each other", fontsize=13, fontweight="bold")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation from -1 to +1")
+    ax.set_title("Relationship Map: how numeric features move together",
+                 fontsize=13, fontweight="bold", pad=12)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation  (-1 to +1)")
     fig.tight_layout()
     return fig
 
@@ -1417,11 +1569,20 @@ def feature_columns(use_phase: bool = True) -> Tuple[List[str], List[str]]:
         "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
         "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
         "Mixed_A_site", "Mixed_B_site",
+        # Added descriptors (#12): differences and counts that capture element
+        # chemistry as NUMBERS instead of one-hot element columns.
+        "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
+        "Cation_count", "N_B_elements",
     ]
     if use_phase:
         numeric.append("PhaseN")
 
-    categorical = ["A", "AP", "B", "BP", "BDP"]
+    # Categorical element columns are intentionally removed (#3). One-hot encoding
+    # every element symbol made the model memorize the tiny dataset (overfitting):
+    # it could "recognize" a compound by its exact elements instead of learning
+    # chemistry. Element identity is still captured numerically through the
+    # atomic-number / mass descriptors above.
+    categorical: List[str] = []
     return numeric, categorical
 
 
@@ -1442,13 +1603,19 @@ def build_feature_matrix(
     categorical_cols = [c for c in categorical_cols if c in df.columns]
 
     numeric_part = df[numeric_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-    categorical_part = pd.get_dummies(
-        df[categorical_cols].fillna("").astype(str),
-        prefix=categorical_cols,
-        dummy_na=False,
-    )
 
-    features = pd.concat([numeric_part, categorical_part], axis=1)
+    # categorical_cols is normally empty now (element one-hots were removed, #3),
+    # so only build dummies when categorical features actually exist. Calling
+    # pd.get_dummies on a zero-column frame raises "No objects to concatenate".
+    if categorical_cols:
+        categorical_part = pd.get_dummies(
+            df[categorical_cols].fillna("").astype(str),
+            prefix=categorical_cols,
+            dummy_na=False,
+        )
+        features = pd.concat([numeric_part, categorical_part], axis=1)
+    else:
+        features = numeric_part
 
     if expected_columns is not None:
         features = features.reindex(columns=expected_columns, fill_value=0)
@@ -1575,6 +1742,87 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
         "yes_rate": float(yes_rate),
         "training_rows": len(X_train),
         "testing_rows": len(X_test),
+        "importance": importance,
+        "overfit_warning": overfit_warning,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def train_purity_model(df: pd.DataFrame, random_state: int = 42) -> dict:
+    """
+    Train a Random Forest to predict whether a compound comes out PURE (#14).
+
+    Mirrors train_ml_model but the target is purity (pure = 1, impure/not made = 0).
+    Phase is never used as an input here because it IS the thing being predicted.
+
+    Returns a dict with results, or {"ok": False, "message": ...}.
+    """
+
+    if not SKLEARN_AVAILABLE:
+        return {"ok": False, "message": "scikit-learn is not installed. Install requirements.txt to use ML Lab."}
+
+    # Keep only rows whose phase was understood (pure / impure / not made).
+    model_df = df[df["P"].isin(["pure", "impure", "not made"])].copy()
+    if model_df.empty:
+        return {"ok": False, "message": "No rows have a recognized phase label yet."}
+
+    model_df["IsPure"] = (model_df["P"] == "pure").astype(int)
+
+    if len(model_df) < 10:
+        return {"ok": False, "message": "Purity model needs at least 10 rows with a known phase."}
+    if model_df["IsPure"].nunique() < 2:
+        return {"ok": False, "message": "Purity model needs both pure and not-pure examples."}
+
+    # use_phase=False so PhaseN (the answer) is never fed in as a feature.
+    X = build_feature_matrix(model_df, use_phase=False)
+    y = model_df["IsPure"].astype(int)
+
+    stratify = y if y.value_counts().min() >= 2 else None
+    test_size = 0.25 if len(model_df) >= 20 else 0.35
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=stratify
+    )
+
+    rf = RandomForestClassifier(
+        n_estimators=150, max_depth=7, min_samples_leaf=2,
+        random_state=random_state, n_jobs=-1, class_weight="balanced_subsample",
+    )
+    rf.fit(X_train, y_train)
+    preds = rf.predict(X_test)
+    accuracy = accuracy_score(y_test, preds)
+    precision = precision_score(y_test, preds, zero_division=0)
+    recall = recall_score(y_test, preds, zero_division=0)
+
+    importance = pd.DataFrame(
+        {"Feature": X.columns, "Importance": rf.feature_importances_}
+    ).sort_values("Importance", ascending=False)
+    importance = importance[importance["Importance"] > 0].head(12)
+
+    majority_class = int(y_train.mode()[0])
+    baseline_accuracy = accuracy_score(y_test, [majority_class] * len(y_test))
+
+    pure_count = int((y == 1).sum())
+    impure_count = int((y == 0).sum())
+    pure_rate = pure_count / len(y) if len(y) else 0.0
+
+    overfit_warning = None
+    if accuracy > 0.85 and len(model_df) < 100:
+        overfit_warning = (
+            f"Purity accuracy is {accuracy:.0%} with only {len(model_df)} rows. "
+            "High accuracy on a small dataset can mean overfitting — treat as a hint, not proof."
+        )
+
+    return {
+        "ok": True,
+        "model": rf,
+        "feature_columns": list(X.columns),
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "baseline_accuracy": float(baseline_accuracy),
+        "pure_count": pure_count,
+        "impure_count": impure_count,
+        "pure_rate": float(pure_rate),
         "importance": importance,
         "overfit_warning": overfit_warning,
     }
