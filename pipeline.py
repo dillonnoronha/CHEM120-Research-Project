@@ -96,7 +96,10 @@ B_SITE_FIELDS = [("B", "BN"), ("BP", "BPN"), ("BDP", "BDPN")]
 
 # Columns that are useful to show first in student-facing tables.
 FRONT_COLUMNS = [
-    "GroupNumber", "Instructor", "Semester", "Slot", "Formula",
+    # Identifiers / who-entered-it first (left side of every table).
+    "GroupNumber", "Instructor", "Name", "Email", "Members", "Semester", "Slot",
+    # Then the actual compound info (formula and its parts).
+    "Formula",
     "A", "AN", "AP", "APN", "B", "BN", "BP", "BPN", "BDP", "BDPN",
     "O", "ON", "P", "Bub", "PhaseN", "BubN",
 ]
@@ -910,6 +913,76 @@ def reconstruct_formula(row: pd.Series) -> str:
     return "".join(parts)
 
 
+def split_member_names(text: object) -> List[str]:
+    """Split a 'Members' cell into individual names.
+
+    Handles commas, semicolons, ampersands, the word 'and', and newlines, e.g.
+    'Justine Bailes, Lucas Chumacero, and Paloma Garcia' -> three names.
+    """
+
+    raw = clean_text(text)
+    if not raw:
+        return []
+    parts = re.split(r",|;|&|\band\b|\n|/", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+# Below this match score, the email is treated as NOT matching any member name
+# (calibrated on real class data: genuine mismatches score well under 0.45).
+EMAIL_MATCH_THRESHOLD = 0.45
+
+
+def _name_email_score(local: str, name: str) -> float:
+    """Similarity (0-1ish) between an email local part and one member name."""
+
+    tokens = re.sub(r"[^a-z ]", "", name.lower()).split()
+    if not tokens:
+        return 0.0
+    candidates = {
+        "".join(tokens),                         # alexaalmanza
+        tokens[0],                               # alexa
+        tokens[-1],                              # almanza
+        tokens[0][0] + tokens[-1],               # aalmanza
+        tokens[-1] + tokens[0][0],               # almanzaa
+        "".join(t[0] for t in tokens) + tokens[-1],
+    }
+    base = max(difflib.SequenceMatcher(None, local, c).ratio() for c in candidates)
+    if len(tokens[-1]) >= 3 and tokens[-1] in local:   # last name appears in email
+        base += 0.30
+    if len(tokens[0]) >= 3 and tokens[0] in local:     # first name appears in email
+        base += 0.20
+    return base
+
+
+def email_member_match(email: object, members: object) -> Tuple[str, float]:
+    """Return (best-matching member name, match score) for an email + roster.
+
+    Returns ("", 0.0) when there is no roster or no usable email local part.
+    """
+
+    names = split_member_names(members)
+    local = re.sub(r"[^a-z]", "", clean_text(email).split("@")[0].lower())
+    if not names or not local:
+        return "", 0.0
+    scored = [(name, _name_email_score(local, name)) for name in names]
+    return max(scored, key=lambda pair: pair[1])
+
+
+def best_name_for_email(email: object, members: object, fallback: object = "") -> str:
+    """Pick the member name that best matches the submitter's email.
+
+    Falls back to the existing name (or the first member) when nothing matches.
+    """
+
+    names = split_member_names(members)
+    if not names:
+        return clean_text(fallback)
+    name, _score = email_member_match(email, members)
+    if not name:
+        return clean_text(fallback) or names[0]
+    return name
+
+
 @st.cache_data(show_spinner=False)
 def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.DataFrame:
     """
@@ -923,6 +996,34 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
 
     df = long_df.copy()
     name_to_symbol, _valid_symbols = make_element_maps(atomic)
+
+    # Name / Members tidy-up.
+    #   * The roster of group members can live in a "Members" column OR (in some
+    #     exports) the whole group is dumped into the "Name" column. Use whichever
+    #     actually holds a list.
+    #   * Name  -> the single member whose name best matches the submitter email.
+    #   * Members -> the full list, with that matched person listed FIRST.
+    if "Members" in df.columns or "Name" in df.columns:
+        emails = df["Email"] if "Email" in df.columns else pd.Series([""] * len(df), index=df.index)
+        members_col = df["Members"] if "Members" in df.columns else pd.Series([""] * len(df), index=df.index)
+        name_col = df["Name"] if "Name" in df.columns else pd.Series([""] * len(df), index=df.index)
+
+        new_names: List[str] = []
+        new_members: List[str] = []
+        for email_value, members_value, name_value in zip(emails, members_col, name_col):
+            roster = members_value if split_member_names(members_value) else name_value
+            people = split_member_names(roster)
+            if not people:
+                new_names.append(clean_text(name_value))
+                new_members.append("")
+                continue
+            matched = best_name_for_email(email_value, roster, fallback=people[0])
+            ordered = [matched] + [p for p in people if p != matched]
+            new_names.append(matched)
+            new_members.append(", ".join(ordered))
+
+        df["Name"] = new_names
+        df["Members"] = new_members
 
     # Clean element symbols.
     for col in ["A", "AP", "B", "BP", "BDP", "O"]:
@@ -1009,7 +1110,24 @@ def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.D
             }
         )
 
+    flagged_emails: set = set()
     for _, row in clean_df.iterrows():
+        # Email vs members: flag when the email doesn't match anyone in Members
+        # (once per group/email so it isn't repeated for every compound row).
+        email_value = clean_text(row.get("Email", ""))
+        members_value = row.get("Members", "")
+        if "@" in email_value and split_member_names(members_value):
+            group_key = (clean_text(row.get("GroupNumber", "")), email_value)
+            if group_key not in flagged_emails:
+                _matched, match_score = email_member_match(email_value, members_value)
+                if match_score < EMAIL_MATCH_THRESHOLD:
+                    flagged_emails.add(group_key)
+                    add_issue(
+                        row, "Email",
+                        f"Email '{email_value}' does not clearly match anyone in the Members list.",
+                        "Check that the submitter is listed in Members, or that the email is correct.",
+                    )
+
         # Required element fields.
         if is_blank(row.get("A")):
             add_issue(row, "A", "Missing A-site element.", "Enter an element symbol like La, Sr, or Ca.")
@@ -1428,6 +1546,25 @@ def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_ta
     )
     df["Cation_count"] = df["N_A_elements"] + df["N_B_elements"]
 
+    # Mixing fractions (#1): how much of each site is the *secondary* cation.
+    # 0.0 = a single element on the site; 0.5 = a 50/50 mix; captures the fact
+    # that A vs A' (or B vs B'/B'') can be present in DIFFERING amounts, which the
+    # binary Mixed_*_site flags do not.
+    def _dopant_fraction(row: pd.Series, main: Tuple[str, str], extras: Sequence[Tuple[str, str]]) -> float:
+        main_ratio = ratio_for_formula(row, main[0], main[1], required=True)
+        main_ratio = 0.0 if np.isnan(main_ratio) else main_ratio
+        extra_ratio = sum(
+            ratio_for_formula(row, sym, rat)
+            for sym, rat in extras
+            if clean_text(row.get(sym, ""))
+        )
+        total = main_ratio + extra_ratio
+        return float(extra_ratio / total) if total > 0 else 0.0
+
+    df["A_mix_fraction"] = df.apply(lambda r: _dopant_fraction(r, ("A", "AN"), [("AP", "APN")]), axis=1)
+    df["B_mix_fraction"] = df.apply(
+        lambda r: _dopant_fraction(r, ("B", "BN"), [("BP", "BPN"), ("BDP", "BDPN")]), axis=1)
+
     return df
 
 
@@ -1618,7 +1755,7 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
         "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
         "Mixed_A_site", "Mixed_B_site",
         "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
-        "Cation_count", "N_B_elements",
+        "Cation_count", "N_B_elements", "A_mix_fraction", "B_mix_fraction",
     ]
     candidates += [c for c in ["A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A"] if c in df.columns]
 
@@ -1649,6 +1786,7 @@ def friendly_label(name: str) -> str:
         "A_B_Z_diff": "A-B atomic #", "A_B_mass_diff": "A-B mass",
         "Avg_cation_Z": "Avg cation #", "Avg_cation_mass": "Avg cation mass",
         "Cation_count": "# cations", "N_B_elements": "# B elements",
+        "A_mix_fraction": "A mixing frac", "B_mix_fraction": "B mixing frac",
     }
     return pretty.get(name, name)
 
@@ -1722,7 +1860,7 @@ def bubble_relationships(corr: pd.DataFrame) -> pd.DataFrame:
 # The ML section is intentionally simple and transparent. It is for generating
 # hypotheses, not proving final scientific conclusions.
 
-def feature_columns(use_phase: bool = True) -> Tuple[List[str], List[str]]:
+def feature_columns(use_phase: bool = True, use_mass: bool = True) -> Tuple[List[str], List[str]]:
     """
     Return numeric and categorical features used by the model.
 
@@ -1730,24 +1868,29 @@ def feature_columns(use_phase: bool = True) -> Tuple[List[str], List[str]]:
     Add or remove features here if the class wants a different ML experiment.
     """
 
+    # Non-mass numeric features. Element identity is captured by atomic NUMBER
+    # plus the mixing/ratio descriptors, so the model still "knows" the chemistry
+    # without one-hot element columns.
     numeric = [
         "AN", "APN", "BN", "BPN", "BDPN", "ON",
-        "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
-        "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
+        "A_avg_Z", "B_avg_Z", "O_to_cation_ratio", "B_to_A_ratio",
         "Mixed_A_site", "Mixed_B_site",
-        # Added descriptors (#12): differences and counts that capture element
-        # chemistry as NUMBERS instead of one-hot element columns.
-        "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
-        "Cation_count", "N_B_elements",
+        "A_B_Z_diff", "Avg_cation_Z", "Cation_count", "N_B_elements",
+        # Mixing fractions (#1): degree of A/A' and B/B' mixing.
+        "A_mix_fraction", "B_mix_fraction",
     ]
+
+    # Mass-based features are optional (#4). Atomic mass and atomic number are
+    # strongly correlated, so the five mass features can dominate importance and
+    # crowd out other signal. The "Include mass descriptors" toggle drops them.
+    if use_mass:
+        numeric += ["A_avg_mass", "B_avg_mass", "FormulaMass", "A_B_mass_diff", "Avg_cation_mass"]
+
     if use_phase:
         numeric.append("PhaseN")
 
-    # Categorical element columns are intentionally removed (#3). One-hot encoding
-    # every element symbol made the model memorize the tiny dataset (overfitting):
-    # it could "recognize" a compound by its exact elements instead of learning
-    # chemistry. Element identity is still captured numerically through the
-    # atomic-number / mass descriptors above.
+    # Categorical element columns are intentionally removed (#3) to avoid the
+    # model memorizing exact elements (overfitting on a small dataset).
     categorical: List[str] = []
     return numeric, categorical
 
@@ -1756,15 +1899,18 @@ def build_feature_matrix(
     df: pd.DataFrame,
     use_phase: bool = True,
     expected_columns: Optional[List[str]] = None,
+    use_mass: bool = True,
 ) -> pd.DataFrame:
     """
-    Build one-hot encoded model features.
+    Build the numeric model feature matrix.
 
     If expected_columns is provided, the output is aligned to a trained model's
-    column order. This is important when predicting a new single compound.
+    column order. This is important when predicting a new single compound — and it
+    means prediction stays correct even if use_mass differs, because the columns
+    are reindexed to whatever the model was trained on.
     """
 
-    numeric_cols, categorical_cols = feature_columns(use_phase=use_phase)
+    numeric_cols, categorical_cols = feature_columns(use_phase=use_phase, use_mass=use_mass)
     numeric_cols = [c for c in numeric_cols if c in df.columns]
     categorical_cols = [c for c in categorical_cols if c in df.columns]
 
@@ -1790,7 +1936,7 @@ def build_feature_matrix(
 
 
 @st.cache_data(show_spinner=False)
-def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int = 42) -> dict:
+def train_ml_model(df: pd.DataFrame, use_phase: bool = True, use_mass: bool = True, random_state: int = 42) -> dict:
     """
     Train a Random Forest and a Logistic Regression model to predict Bubble = yes.
 
@@ -1821,7 +1967,7 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
             "message": "ML Lab needs both bubble=yes and bubble≠yes examples. The current data only has one class.",
         }
 
-    X = build_feature_matrix(model_df, use_phase=use_phase)
+    X = build_feature_matrix(model_df, use_phase=use_phase, use_mass=use_mass)
     y = model_df["BubbleYes"].astype(int)
 
     stratify = y if y.value_counts().min() >= 2 else None
@@ -1914,7 +2060,7 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, random_state: int =
 
 
 @st.cache_data(show_spinner=False)
-def train_purity_model(df: pd.DataFrame, random_state: int = 42) -> dict:
+def train_purity_model(df: pd.DataFrame, use_mass: bool = True, random_state: int = 42) -> dict:
     """
     Train a Random Forest to predict whether a compound comes out PURE (#14).
 
@@ -1940,7 +2086,7 @@ def train_purity_model(df: pd.DataFrame, random_state: int = 42) -> dict:
         return {"ok": False, "message": "Purity model needs both pure and not-pure examples."}
 
     # use_phase=False so PhaseN (the answer) is never fed in as a feature.
-    X = build_feature_matrix(model_df, use_phase=False)
+    X = build_feature_matrix(model_df, use_phase=False, use_mass=use_mass)
     y = model_df["IsPure"].astype(int)
 
     stratify = y if y.value_counts().min() >= 2 else None
@@ -2055,7 +2201,7 @@ PCA_FEATURE_COLUMNS = [
     "AN", "BN", "ON", "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
     "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
     "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
-    "Cation_count", "N_B_elements",
+    "Cation_count", "N_B_elements", "A_mix_fraction", "B_mix_fraction",
 ]
 
 
