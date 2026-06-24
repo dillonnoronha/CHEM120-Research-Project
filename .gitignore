@@ -5,3 +5,11 @@ data/Long_Format.xlsx
 data/Old_Data.xlsx
 data/.DS_Store
 .DS_Store
+
+# Python bytecode cache — the source of the stale-import bug. Never commit it.
+__pycache__/
+*.pyc
+*.pyo
+
+# Streamlit local settings
+.streamlit/secrets.toml

@@ -425,7 +425,7 @@ def render_explore_tab(described_df: pd.DataFrame) -> None:
 
     with st.expander("Descriptor preview"):
         descriptor_cols = [c for c in [
-            "Formula", "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
+            "Formula", "A_avg_Z", "B_avg_Z", "A_mix_fraction", "B_mix_fraction",
             "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio", "BubbleLabel", "PhaseLabel",
         ] if c in filtered.columns]
         st.dataframe(filtered[descriptor_cols].round(4), use_container_width=True, height=300)
@@ -466,10 +466,29 @@ def render_heatmap_tab(described_df: pd.DataFrame) -> None:
         st.markdown("**+1** rise together · **0** no link · **-1** opposite. Correlation is not causation.")
         rel = bubble_relationships(corr)
         st.markdown("#### Strongest links to bubbling")
+        st.caption("Computed across **all** features (not just the ones shown in the map), "
+                   "so an item can appear here without being in your current selection.")
         if rel.empty:
             st.info("Not available yet.")
         else:
             st.dataframe(rel.round(3), use_container_width=True, hide_index=True, height=280)
+
+    with st.expander("📖 What the terms mean"):
+        st.markdown(
+            "- **Bubbles (yes)** — 1 if the compound bubbled, else 0.\n"
+            "- **Phase (pure=2)** — phase code: not made = 0, impure = 1, pure = 2.\n"
+            "- **A / B ratio**, **A′/B′/B″ ratio**, **O ratio** — the amounts in the formula.\n"
+            "- **A atomic # / B atomic #** — ratio-weighted average atomic number on each site.\n"
+            "- **A mass / B mass / Formula mass** — ratio-weighted atomic masses and total formula mass.\n"
+            "- **O : cation** — oxygen ratio ÷ total cation ratio.\n"
+            "- **B : A** — total B-site ratio ÷ total A-site ratio.\n"
+            "- **A-B atomic # / A-B mass** — difference between the A-site and B-site averages.\n"
+            "- **Avg cation # / Avg cation mass** — averages across both cation sites together.\n"
+            "- **# cations / # B elements** — how many distinct elements are present.\n"
+            "- **Mixed A / Mixed B** — 1 if that site has more than one element.\n"
+            "- **A mixing frac / B mixing frac** — share of the site taken by the *second* element "
+            "(0 = single element, 0.5 = a 50/50 mix)."
+        )
 
 
 def render_pca_tab(described_df: pd.DataFrame) -> None:
@@ -506,16 +525,20 @@ def render_pca_tab(described_df: pd.DataFrame) -> None:
                    f"{len(result['features'])} descriptors.")
 
     with st.expander("What drives each axis (loadings)"):
-        st.caption("Bigger absolute values = the descriptor pushes a compound further along that axis.")
-        st.dataframe(result["loadings"].round(2), use_container_width=True)
+        st.caption("Sorted by influence on PC1. Bigger absolute values = the descriptor pushes a "
+                   "compound further along that axis.")
+        loadings = result["loadings"].copy()
+        loadings = loadings.reindex(loadings["PC1"].abs().sort_values(ascending=False).index)
+        st.dataframe(loadings.round(2), use_container_width=True)
 
 
-def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame, use_phase_in_ml: bool) -> None:
+def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame,
+                  use_phase_in_ml: bool, use_mass_in_ml: bool) -> None:
     """Tab 4 — train the bubble + purity models and predict a proposed compound."""
 
     st.caption("A hypothesis tool, not proof. Two models: one for bubbling, one for purity.")
 
-    ml_result = train_ml_model(described_df, use_phase=use_phase_in_ml)
+    ml_result = train_ml_model(described_df, use_phase=use_phase_in_ml, use_mass=use_mass_in_ml)
     if not ml_result.get("ok"):
         st.warning(ml_result.get("message", "Bubble model could not be trained."))
         return
@@ -560,7 +583,7 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
 
     # --- Purity model: never sees the phase label as input ---
     st.markdown("#### Purity model")
-    purity_result = train_purity_model(described_df)
+    purity_result = train_purity_model(described_df, use_mass=use_mass_in_ml)
     if not purity_result.get("ok"):
         st.info(purity_result.get("message", "Purity model not available yet."))
     else:
@@ -580,27 +603,41 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
 
     # --- Predict a proposed compound (bubble + purity together) ---
     st.markdown("#### Test a proposed compound")
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        pred_a = st.text_input("A-site element", value="La", key="pred_a")
-        pred_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
-    with p2:
-        pred_b = st.text_input("B-site element", value="Ni", key="pred_b")
-        pred_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
-    with p3:
+    st.caption("Leave A′ / B′ blank for a simple compound, or fill them in for a mixed cation site.")
+
+    st.markdown("**A-site**")
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        pred_a = st.text_input("A element", value="La", key="pred_a")
+    with a2:
+        pred_an = st.number_input("A ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
+    with a3:
+        pred_ap = st.text_input("A′ element", value="", key="pred_ap")
+    with a4:
+        pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
+
+    st.markdown("**B-site**")
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        pred_b = st.text_input("B element", value="Ni", key="pred_b")
+    with b2:
+        pred_bn = st.number_input("B ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
+    with b3:
+        pred_bp = st.text_input("B′ element", value="", key="pred_bp")
+    with b4:
+        pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
+
+    o1, o2, o3 = st.columns(3)
+    with o1:
         pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
+    with o2:
         pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
 
-    with st.expander("Mixed-site elements (advanced)"):
-        adv1, adv2, adv3 = st.columns(3)
+    with st.expander("Third B-site element (B″, advanced)"):
+        adv1, adv2 = st.columns(2)
         with adv1:
-            pred_ap = st.text_input("A′-site element", value="", key="pred_ap")
-            pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
+            pred_bdp = st.text_input("B″ element", value="", key="pred_bdp")
         with adv2:
-            pred_bp = st.text_input("B′-site element", value="", key="pred_bp")
-            pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
-        with adv3:
-            pred_bdp = st.text_input("B″-site element", value="", key="pred_bdp")
             pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
     if st.button("Predict bubble & purity", type="primary"):
@@ -849,6 +886,11 @@ def main() -> None:
         "Use phase in bubble model", value=True,
         help="Turn off to make the bubble model ignore pure/impure labels.",
     )
+    use_mass_in_ml = st.sidebar.toggle(
+        "Include mass descriptors", value=True,
+        help="Atomic mass and atomic number are highly correlated. Turn off to stop "
+             "mass features from dominating the models and see what other signal remains.",
+    )
 
     # ----- Hero header -----
     st.markdown(
@@ -961,7 +1003,7 @@ def main() -> None:
     with tab_structure:
         render_pca_tab(described_df)
     with tab_ml:
-        render_ml_tab(described_df, atomic, en_table, use_phase_in_ml)
+        render_ml_tab(described_df, atomic, en_table, use_phase_in_ml, use_mass_in_ml)
     with tab_add:
         render_add_compound_tab(atomic, en_table)
     with tab_export:
