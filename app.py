@@ -36,9 +36,11 @@ from pipeline import (
     APP_TITLE,
     APP_SUBTITLE,
     add_chemical_descriptors,
+    apply_element_fixes,
     bubble_relationships,
     build_feature_matrix,
     clean_and_encode_data,
+    compute_pca,
     dataframe_to_csv_bytes,
     dataframe_to_excel_bytes,
     detect_numeric_outliers,
@@ -56,9 +58,13 @@ from pipeline import (
     ordered_columns,
     plot_bar_chart,
     plot_heatmap,
+    plot_pca_scatter,
+    propose_element_fixes,
     read_local_table,
     read_table_from_bytes,
+    remove_invalid_element_rows,
     summarize_by_element,
+    valid_element_symbols,
     train_ml_model,
     train_purity_model,
     validate_compound_rows,
@@ -216,10 +222,76 @@ def inject_css() -> None:
 # (main() does that) — they just fill it.
 # =============================================================================
 
-def render_check_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outlier_df: pd.DataFrame) -> None:
+def render_did_you_mean(fix_proposals: pd.DataFrame, all_symbols: list) -> None:
+    """Pre-cleaning panel: a table of invalid elements, each with a fix dropdown.
+
+    Built with st.data_editor so every problem row has a "Fix to" dropdown,
+    pre-set to our best guess. Choosing a symbol corrects the row; "Remove row"
+    drops it. Choices are saved to st.session_state.element_fixes and applied
+    (in main) on the next rerun.
+    """
+
+    n = len(fix_proposals)
+    with st.expander(f"🛠️ Fix invalid elements ({n} to review)", expanded=True):
+        st.caption("Each row is an entry that isn't a real element symbol. The **Fix to** dropdown "
+                   "is pre-set to the best guess — change it or pick **Remove row**, then click Apply. "
+                   "(Editable tables can't tint cells red, so invalid values are flagged with ⚠️.)")
+
+        editor_df = pd.DataFrame({
+            "Row": fix_proposals["SourceRow"],
+            "Slot": fix_proposals["Slot"],
+            "Field": fix_proposals["Field"],
+            "Invalid value": fix_proposals["Original"],
+            "Did you mean": fix_proposals["Suggestions"].apply(
+                lambda s: ", ".join(s) if s else "(no close match)"),
+            "Fix to": fix_proposals["Suggestions"].apply(lambda s: s[0] if s else "Remove row"),
+        })
+
+        edited = st.data_editor(
+            editor_df,
+            hide_index=True,
+            use_container_width=True,
+            key="fix_editor",
+            column_config={
+                "Row": st.column_config.Column("Row", disabled=True),
+                "Slot": st.column_config.Column("Slot", disabled=True),
+                "Field": st.column_config.Column("Field", disabled=True),
+                "Invalid value": st.column_config.Column("⚠️ Invalid value", disabled=True),
+                "Did you mean": st.column_config.Column("Did you mean", disabled=True),
+                "Fix to": st.column_config.SelectboxColumn(
+                    "Fix to", options=["Remove row"] + all_symbols, required=True),
+            },
+        )
+
+        col_a, col_b = st.columns([1, 4])
+        with col_a:
+            if st.button("Apply", type="primary", key="apply_element_fixes"):
+                fixes = dict(st.session_state.element_fixes)
+                for _, r in edited.iterrows():
+                    key = f"{r['Row']}|{r['Slot']}|{r['Field']}"
+                    if r["Fix to"] == "Remove row":
+                        fixes.pop(key, None)          # no correction -> row is removed
+                    else:
+                        fixes[key] = r["Fix to"]      # replace with chosen symbol
+                st.session_state.element_fixes = fixes
+                st.rerun()
+        with col_b:
+            if st.session_state.element_fixes and st.button("Reset all corrections", key="reset_element_fixes"):
+                st.session_state.element_fixes = {}
+                st.rerun()
+
+
+def render_check_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame,
+                     outlier_df: pd.DataFrame, cleaning_log: pd.DataFrame,
+                     fix_proposals: pd.DataFrame, corrections_log: pd.DataFrame,
+                     all_symbols: list) -> None:
     """Tab 1 — surface data-entry problems before any analysis."""
 
     st.caption("Find and fix data-entry mistakes before using the data for graphs or ML.")
+
+    # Pre-cleaning "did you mean?" suggestions (only when invalid elements remain).
+    if not fix_proposals.empty:
+        render_did_you_mean(fix_proposals, all_symbols)
 
     # Both columns use the same lead-in pattern (header + one-line caption + a
     # fixed-height table) so the two tables line up vertically.
@@ -246,6 +318,20 @@ def render_check_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outlie
         st.warning("No compound rows found. Check that the file uses columns like 1A, 1AN, 1B, 1BN, 1O, 1ON, 1P, 1Bub.")
     else:
         st.dataframe(described_df[ordered_columns(described_df)], use_container_width=True, height=380)
+
+    # Clickable log of what cleaning changed: corrections applied + rows removed.
+    n_removed = len(cleaning_log)
+    n_fixed = len(corrections_log)
+    with st.expander(f"What cleaning changed ({n_fixed} corrected, {n_removed} removed)"):
+        if not corrections_log.empty:
+            st.markdown("**Corrections applied (Did you mean?)**")
+            st.dataframe(corrections_log, use_container_width=True, hide_index=True)
+        if not cleaning_log.empty:
+            st.markdown("**Rows removed (invalid element)**")
+            st.caption("Removed because they contained an element that isn't a real periodic-table symbol.")
+            st.dataframe(cleaning_log, use_container_width=True, hide_index=True)
+        if corrections_log.empty and cleaning_log.empty:
+            st.caption("No rows removed or corrected. Symbols, formatting, and placeholder text were standardized in place.")
 
     with st.expander("Data-entry rules"):
         st.markdown(
@@ -384,6 +470,44 @@ def render_heatmap_tab(described_df: pd.DataFrame) -> None:
             st.info("Not available yet.")
         else:
             st.dataframe(rel.round(3), use_container_width=True, hide_index=True, height=280)
+
+
+def render_pca_tab(described_df: pd.DataFrame) -> None:
+    """Tab 4 — PCA structure map with optional KMeans clusters."""
+
+    st.caption("Squeezes all numeric descriptors into a 2-D map. Nearby compounds have similar "
+               "composition. Exploration only — outcomes don't cluster strongly here.")
+
+    # Slider drives clustering. When it's >= 2, KMeans runs and the color control
+    # gains a "Cluster" option that becomes the default, so the map updates right
+    # away instead of needing a separate selection.
+    k = st.slider("KMeans clusters (0 = off)", min_value=0, max_value=8, value=0,
+                  help="Group compounds into clusters by composition. Raise above 1 to see clusters.")
+
+    result = compute_pca(described_df, n_clusters=k)
+    if not result.get("ok"):
+        st.info(result.get("message", "PCA not available."))
+        return
+
+    if result["has_clusters"]:
+        color_by = st.radio("Color points by", ["Cluster", "Bubble", "Phase"], horizontal=True)
+    else:
+        color_by = st.radio("Color points by", ["Bubble", "Phase"], horizontal=True)
+
+    ev = result["explained"]
+    map_cols = st.columns([1.4, 1])
+    with map_cols[0]:
+        st.pyplot(plot_pca_scatter(result["coords"], color_by=color_by), use_container_width=True)
+    with map_cols[1]:
+        st.metric("PC1 variance", f"{ev[0]:.0%}")
+        st.metric("PC2 variance", f"{ev[1]:.0%}")
+        st.metric("Compounds plotted", f"{result['n_used']:,}")
+        st.caption(f"PC1 + PC2 together explain {sum(ev):.0%} of the variation across "
+                   f"{len(result['features'])} descriptors.")
+
+    with st.expander("What drives each axis (loadings)"):
+        st.caption("Bigger absolute values = the descriptor pushes a compound further along that axis.")
+        st.dataframe(result["loadings"].round(2), use_container_width=True)
 
 
 def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame, use_phase_in_ml: bool) -> None:
@@ -785,6 +909,12 @@ def main() -> None:
             for w in column_warnings:
                 st.markdown(f"- {w}")
 
+    # Apply any "Did you mean?" corrections the user chose in the Check tab, then
+    # work out which invalid elements still need a decision.
+    st.session_state.setdefault("element_fixes", {})
+    long_df, corrections_log = apply_element_fixes(long_df, st.session_state.element_fixes)
+    fix_proposals = propose_element_fixes(long_df, atomic)
+
     clean_df = clean_and_encode_data(long_df, atomic)
     described_df = add_chemical_descriptors(clean_df, atomic, en_table)
 
@@ -794,6 +924,10 @@ def main() -> None:
     st.session_state.setdefault("pending_manual_issues", pd.DataFrame())
     if not st.session_state.manual_entries.empty:
         described_df = pd.concat([described_df, st.session_state.manual_entries], ignore_index=True)
+
+    # Remove rows whose elements aren't real periodic-table symbols (e.g. "BATU").
+    # cleaning_log records what was dropped so the Check tab can show the changes.
+    described_df, cleaning_log = remove_invalid_element_rows(described_df, atomic)
 
     issues_df = validate_compound_rows(described_df, atomic)
     outlier_df = detect_numeric_outliers(described_df, z_threshold=z_threshold)
@@ -812,15 +946,20 @@ def main() -> None:
             unsafe_allow_html=True)
 
     # ----- Everything lives in tabs (no long scroll) -----
-    tab_check, tab_explore, tab_heatmap, tab_ml, tab_add, tab_export, tab_semester = st.tabs(
-        ["✅ Check", "📊 Explore", "🔥 Heatmap", "🔮 Predict", "➕ Add", "⬇️ Export", "🔄 New Semester"]
+    (tab_check, tab_explore, tab_heatmap, tab_structure, tab_ml,
+     tab_add, tab_export, tab_semester) = st.tabs(
+        ["✅ Check", "📊 Explore", "🔥 Heatmap", "🔬 Structure",
+         "🔮 Predict", "➕ Add", "⬇️ Export", "🔄 New Semester"]
     )
     with tab_check:
-        render_check_tab(described_df, issues_df, outlier_df)
+        render_check_tab(described_df, issues_df, outlier_df, cleaning_log,
+                         fix_proposals, corrections_log, valid_element_symbols(atomic))
     with tab_explore:
         render_explore_tab(described_df)
     with tab_heatmap:
         render_heatmap_tab(described_df)
+    with tab_structure:
+        render_pca_tab(described_df)
     with tab_ml:
         render_ml_tab(described_df, atomic, en_table, use_phase_in_ml)
     with tab_add:

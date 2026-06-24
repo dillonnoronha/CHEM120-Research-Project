@@ -26,6 +26,9 @@ Sections
 
 from __future__ import annotations
 
+# Build marker (bump to force Python to recompile if OneDrive serves a stale
+# __pycache__/*.pyc with an older source mtime): 2026-06-24c
+import difflib
 import io
 import math
 import re
@@ -1063,6 +1066,169 @@ def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.D
 
 
 @st.cache_data(show_spinner=False)
+def remove_invalid_element_rows(df: pd.DataFrame, atomic: pd.DataFrame) -> tuple:
+    """
+    Drop rows that contain an element symbol which is not on the periodic table.
+
+    Placeholder text (e.g. "No B' element", "NO") is already blanked during
+    cleaning, so it does NOT trigger removal here — only genuine non-elements
+    like "BATU" do.
+
+    Returns
+    -------
+    (clean_df, change_log)
+        clean_df   : the dataframe with invalid-element rows removed.
+        change_log : one row per problem found, with columns
+                     Row, GroupNumber, Slot, Formula, Field, Value, Change.
+                     Empty if nothing was removed.
+    """
+
+    log_columns = ["Row", "GroupNumber", "Slot", "Formula", "Field", "Value", "Change"]
+    if df.empty:
+        return df.copy(), pd.DataFrame(columns=log_columns)
+
+    _name_to_symbol, valid_symbols = make_element_maps(atomic)
+    element_fields = ["A", "AP", "B", "BP", "BDP", "O"]
+
+    rows_to_drop: List[object] = []
+    log: List[dict] = []
+
+    for idx, row in df.iterrows():
+        bad_fields = []
+        for field in element_fields:
+            value = clean_text(row.get(field, ""))
+            if value and value not in valid_symbols:
+                bad_fields.append((field, value))
+
+        if bad_fields:
+            rows_to_drop.append(idx)
+            for field, value in bad_fields:
+                log.append({
+                    "Row": row.get("SourceRow", ""),
+                    "GroupNumber": row.get("GroupNumber", ""),
+                    "Slot": row.get("Slot", ""),
+                    "Formula": row.get("Formula", ""),
+                    "Field": field,
+                    "Value": value,
+                    "Change": f"Row removed — '{value}' is not a real element symbol.",
+                })
+
+    clean_df = df.drop(index=rows_to_drop).reset_index(drop=True)
+    return clean_df, pd.DataFrame(log, columns=log_columns)
+
+
+def suggest_elements(value: object, atomic: pd.DataFrame, n: int = 4) -> List[str]:
+    """
+    Suggest the most likely valid element symbols for a bad entry ("did you mean?").
+
+    Combines three strategies, best matches first:
+      1. Full-name typos   ("Nickle" -> Ni) via fuzzy match on element names.
+      2. Symbol typos       ("BATU" -> Ba) via fuzzy match on symbols.
+      3. Prefix heuristic   ("Nii" -> Ni) when the first 1-2 letters are a symbol.
+    Returns an empty list when nothing is close (e.g. "Zzz").
+    """
+
+    text = clean_text(value)
+    if not text:
+        return []
+
+    name_to_symbol, valid_symbols = make_element_maps(atomic)
+    out: List[str] = []
+
+    for name in difflib.get_close_matches(text.lower(), list(name_to_symbol.keys()), n=n, cutoff=0.6):
+        symbol = name_to_symbol[name]
+        if symbol not in out:
+            out.append(symbol)
+
+    for symbol in difflib.get_close_matches(text.title(), sorted(valid_symbols), n=n, cutoff=0.5):
+        if symbol not in out:
+            out.append(symbol)
+
+    for k in (2, 1):
+        prefix = text[:k].title()
+        if prefix in valid_symbols and prefix not in out:
+            out.append(prefix)
+
+    return out[:n]
+
+
+def valid_element_symbols(atomic: pd.DataFrame) -> List[str]:
+    """Return the sorted list of valid element symbols (for fix dropdowns)."""
+
+    _name_to_symbol, valid_symbols = make_element_maps(atomic)
+    return sorted(valid_symbols)
+
+
+def propose_element_fixes(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.DataFrame:
+    """
+    Find element cells that are not valid symbols and attach suggestions.
+
+    Runs on the long-format dataframe (raw element text) so it can be used BEFORE
+    cleaning. Placeholder text (e.g. "No B' element") is treated as blank and is
+    not reported here. Returns columns:
+        SourceRow, Slot, GroupNumber, Field, Original, Suggestions (list[str]).
+    """
+
+    cols = ["SourceRow", "Slot", "GroupNumber", "Field", "Original", "Suggestions"]
+    if long_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    name_to_symbol, valid_symbols = make_element_maps(atomic)
+    rows: List[dict] = []
+    for _, row in long_df.iterrows():
+        for field in ["A", "AP", "B", "BP", "BDP", "O"]:
+            original = clean_text(row.get(field, ""))
+            if not original:
+                continue
+            cleaned = clean_symbol(original, name_to_symbol)
+            if cleaned and cleaned not in valid_symbols:
+                rows.append({
+                    "SourceRow": row.get("SourceRow", ""),
+                    "Slot": row.get("Slot", ""),
+                    "GroupNumber": row.get("GroupNumber", ""),
+                    "Field": field,
+                    "Original": original,
+                    "Suggestions": suggest_elements(original, atomic),
+                })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def apply_element_fixes(long_df: pd.DataFrame, fixes: Dict[str, str]) -> tuple:
+    """
+    Replace element cells with user-chosen corrections before cleaning.
+
+    `fixes` maps a cell key "SourceRow|Slot|Field" to the chosen valid symbol.
+    Returns (fixed_long_df, corrections_log) where the log has columns
+    Row, GroupNumber, Slot, Field, Original, Change.
+    """
+
+    cols = ["Row", "GroupNumber", "Slot", "Field", "Original", "Change"]
+    if long_df.empty or not fixes:
+        return long_df.copy(), pd.DataFrame(columns=cols)
+
+    df = long_df.copy()
+    log: List[dict] = []
+    for idx, row in df.iterrows():
+        key_base = f"{row.get('SourceRow', '')}|{row.get('Slot', '')}"
+        for field in ["A", "AP", "B", "BP", "BDP", "O"]:
+            new_symbol = fixes.get(f"{key_base}|{field}")
+            if not new_symbol:
+                continue
+            original = clean_text(row.get(field, ""))
+            if original and new_symbol != original:
+                df.at[idx, field] = new_symbol
+                log.append({
+                    "Row": row.get("SourceRow", ""),
+                    "GroupNumber": row.get("GroupNumber", ""),
+                    "Slot": row.get("Slot", ""),
+                    "Field": field,
+                    "Original": original,
+                    "Change": f"Corrected '{original}' → '{new_symbol}'.",
+                })
+    return df, pd.DataFrame(log, columns=cols)
+
+
+@st.cache_data(show_spinner=False)
 def detect_numeric_outliers(df: pd.DataFrame, z_threshold: float = 3.0) -> pd.DataFrame:
     """
     Flag unusual numeric values using z-scores.
@@ -1875,6 +2041,108 @@ def make_single_prediction_row(
     clean = clean_and_encode_data(raw, atomic)
     described = add_chemical_descriptors(clean, atomic, en_table)
     return described
+
+
+# =============================================================================
+# 10b. DIMENSION REDUCTION (PCA / CLUSTERING)
+# =============================================================================
+# PCA squeezes the many numeric descriptors down to a 2-D map so compounds can be
+# plotted and compared. It is an EXPLORATION tool: nearby points have similar
+# composition. Outcomes (bubble / pure) do not separate strongly in this dataset,
+# so the map is for spotting structure and outliers, not for prediction.
+
+PCA_FEATURE_COLUMNS = [
+    "AN", "BN", "ON", "A_avg_Z", "B_avg_Z", "A_avg_mass", "B_avg_mass",
+    "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
+    "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
+    "Cation_count", "N_B_elements",
+]
+
+
+@st.cache_data(show_spinner=False)
+def compute_pca(df: pd.DataFrame, n_clusters: int = 0, random_state: int = 42) -> dict:
+    """
+    Project compounds onto their first two principal components.
+
+    Parameters
+    ----------
+    n_clusters : int
+        If >= 2, also run KMeans and label each point with a cluster id.
+
+    Returns a dict: {ok, coords, explained, n_used, features, loadings, has_clusters}
+    or {"ok": False, "message": ...} when PCA can't run.
+    """
+
+    if not SKLEARN_AVAILABLE:
+        return {"ok": False, "message": "scikit-learn is not installed. Install requirements.txt to use this tab."}
+
+    feats = [c for c in PCA_FEATURE_COLUMNS if c in df.columns]
+    if df.empty or len(feats) < 2:
+        return {"ok": False, "message": "Not enough numeric features to run PCA."}
+
+    # Fill gaps with each column's mean, then drop any column that is still empty.
+    data = df[feats].apply(pd.to_numeric, errors="coerce")
+    data = data.fillna(data.mean(numeric_only=True)).dropna(axis=1, how="any")
+    if data.shape[1] < 2 or len(data) < 3:
+        return {"ok": False, "message": "Not enough complete rows/features to run PCA."}
+
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA
+
+    scaled = StandardScaler().fit_transform(data.values)
+    pca = PCA(n_components=2, random_state=random_state)
+    coords = pca.fit_transform(scaled)
+
+    out = pd.DataFrame({"PC1": coords[:, 0], "PC2": coords[:, 1]}, index=data.index)
+    for out_col, src_col in [("Formula", "Formula"), ("Bubble", "BubbleLabel"), ("Phase", "PhaseLabel")]:
+        out[out_col] = df.loc[data.index, src_col] if src_col in df.columns else ""
+
+    if n_clusters and n_clusters >= 2 and len(out) >= n_clusters:
+        from sklearn.cluster import KMeans
+        km = KMeans(n_clusters=int(n_clusters), n_init=10, random_state=random_state)
+        out["Cluster"] = km.fit_predict(scaled).astype(str)
+
+    loadings = pd.DataFrame(pca.components_[:2].T, index=data.columns, columns=["PC1", "PC2"])
+    return {
+        "ok": True,
+        "coords": out,
+        "explained": [float(v) for v in pca.explained_variance_ratio_[:2]],
+        "n_used": len(out),
+        "features": list(data.columns),
+        "loadings": loadings,
+        "has_clusters": "Cluster" in out.columns,
+    }
+
+
+def plot_pca_scatter(coords: pd.DataFrame, color_by: str = "Bubble"):
+    """Return a 2-D PCA scatter, points colored by the chosen column."""
+
+    fig, ax = plt.subplots(figsize=(7.5, 6))
+
+    if color_by not in coords.columns:
+        color_by = None
+
+    if color_by is None:
+        ax.scatter(coords["PC1"], coords["PC2"], s=28, alpha=0.7, color="#0071e3")
+    else:
+        groups = coords[color_by].astype(str).replace("", "Missing").fillna("Missing")
+        palette = ["#0071e3", "#ff9f0a", "#30d158", "#ff453a", "#5e5ce6",
+                   "#64d2ff", "#bf5af2", "#ffd60a", "#8e8e93", "#ac8e68"]
+        for i, label in enumerate(sorted(groups.unique())):
+            sub = coords[groups == label]
+            ax.scatter(sub["PC1"], sub["PC2"], s=28, alpha=0.75,
+                       color=palette[i % len(palette)], label=str(label))
+        ax.legend(title=color_by, fontsize=8, title_fontsize=9, loc="best", framealpha=0.9)
+
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.set_title("PCA map — nearby compounds have similar composition",
+                 fontsize=13, fontweight="bold")
+    ax.grid(alpha=0.2)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    return fig
 
 
 # =============================================================================
