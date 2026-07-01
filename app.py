@@ -121,7 +121,7 @@ _ST_THEME_OPTIONS = {
 def sync_streamlit_theme(mode: str) -> None:
     """Swap Streamlit's native theme at runtime, rerunning once so it takes effect."""
 
-    st.session_state.setdefault("_applied_theme", "dark")
+    st.session_state.setdefault("_applied_theme", "light")   # matches config.toml
     if st.session_state["_applied_theme"] == mode:
         return
     try:
@@ -1544,9 +1544,9 @@ def main() -> None:
 
     # ----- Sidebar: theme, data source + controls -----
     st.sidebar.markdown("## 🧪 CHEM 120")
-    # Dark-mode switch: ON = dark (the default), OFF = light. The label and icon
+    # Dark-mode switch: OFF = light (the default), ON = dark. The label and icon
     # follow the current mode — moon while dark, sun while light.
-    st.session_state.setdefault("dark_mode", True)
+    st.session_state.setdefault("dark_mode", False)
     dark_mode = st.sidebar.toggle(
         "🌙 Dark mode" if st.session_state["dark_mode"] else "☀️ Light mode",
         key="dark_mode",
