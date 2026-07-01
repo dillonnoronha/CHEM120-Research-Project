@@ -1534,8 +1534,11 @@ def main() -> None:
 
     # ----- Sidebar: theme, data source + controls -----
     st.sidebar.markdown("## 🧪 CHEM 120")
+    # Label shows the mode you'd switch TO: sun while dark, moon while light.
+    _is_light_now = st.session_state.get("light_mode", False)
     light_mode = st.sidebar.toggle(
-        "☀️ Light mode", value=False, key="light_mode",
+        "🌙 Dark mode" if _is_light_now else "☀️ Light mode",
+        key="light_mode",
         help="Switch between the dark lab theme and a bright classroom-friendly look.",
     )
     theme_mode = "light" if light_mode else "dark"
