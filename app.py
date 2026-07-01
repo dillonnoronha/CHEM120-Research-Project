@@ -611,6 +611,12 @@ def multi_pills_with_all_none(label: str, options: list[str], key: str) -> list[
     if key in st.session_state:
         st.session_state[key] = [v for v in st.session_state[key] if v in options]
 
+    def _flip_selection(state_key: str = key, opts: tuple = tuple(options)) -> None:
+        # Runs BEFORE the rerun renders, so the label below is always in sync
+        # with what the click just did (no one-click lag).
+        all_now = set(st.session_state.get(state_key, opts)) == set(opts)
+        st.session_state[state_key] = [] if all_now else list(opts)
+
     currently_all = set(st.session_state.get(key, options)) == set(options)
 
     head = st.columns([3.4, 1.6])
@@ -618,8 +624,8 @@ def multi_pills_with_all_none(label: str, options: list[str], key: str) -> list[
     toggle_label = "✕ Clear all" if currently_all else "✓ Select all"
     toggle_help = ("Deselect everything, then click just the ones you want"
                    if currently_all else f"Select every {label.lower()}")
-    if head[1].button(toggle_label, key=f"{key}_toggle", help=toggle_help, use_container_width=True):
-        st.session_state[key] = [] if currently_all else list(options)
+    head[1].button(toggle_label, key=f"{key}_toggle", help=toggle_help,
+                   use_container_width=True, on_click=_flip_selection)
 
     kwargs = {} if key in st.session_state else {"default": list(options)}
     selected = st.pills(label, options, selection_mode="multi", key=key,
