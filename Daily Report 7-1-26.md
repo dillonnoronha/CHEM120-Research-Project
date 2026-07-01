@@ -60,3 +60,12 @@
 py -m pip install -r requirements.txt
 py -m streamlit run app.py
 ```
+
+## 7. Follow-up fixes (same day, second commit)
+
+- **Stale-bytecode ImportError fixed** — first launch failed with `cannot import name 'INSTRUCTOR_PASSCODE'` because OneDrive served an old `__pycache__/pipeline.pyc`; the cache folder was cleared (delete `__pycache__` if it ever recurs).
+- **UI spacing** — tab row no longer clips into the KPI cards; hero → cards → tabs are evenly spaced.
+- **PCA legend bug fixed** — a literal "undefined" rendered over the Structure-tab legend (Plotly title left undefined while themed); charts now always set a real title string, and horizontal legends got headroom so nothing overlaps.
+- **Light/dark mode switcher** — new ☀️ toggle at the top of the sidebar. Swaps the full look: CSS palette, every Plotly chart (via `set_chart_theme`), and Streamlit's native widget/dataframe colors at runtime. Dark stays the default.
+- **Explore filters simplified** — the two All/None buttons are now a single toggle per filter ("✕ Clear all" ⇄ "✓ Select all").
+- Branch `secondmain` updated with all of the above — push with `git push -u origin secondmain`.
