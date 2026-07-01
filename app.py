@@ -140,10 +140,15 @@ def sync_streamlit_theme(mode: str) -> None:
 # =============================================================================
 
 def inject_css(mode: str = "dark") -> None:
-    """Inject the app-wide CSS; `mode` switches between the dark and light looks."""
+    """
+    Inject the app-wide CSS; `mode` switches between the dark and light looks.
 
-    st.markdown(
-        """
+    Everything is emitted in ONE st.markdown call: each Streamlit element adds a
+    vertical flex-gap slot, so injecting light overrides as a second element used
+    to nudge the whole page down slightly in light mode.
+    """
+
+    css = """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
 
@@ -430,12 +435,11 @@ def inject_css(mode: str = "dark") -> None:
         ::-webkit-scrollbar-thumb { background: #24324f; border-radius: 999px; }
         ::-webkit-scrollbar-thumb:hover { background: #33456b; }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
 
     if mode == "light":
-        st.markdown(_LIGHT_CSS_OVERRIDES, unsafe_allow_html=True)
+        css += _LIGHT_CSS_OVERRIDES
+    st.markdown(css, unsafe_allow_html=True)
 
 
 # Light-mode overrides: same selectors as the base (dark) CSS, injected after it
