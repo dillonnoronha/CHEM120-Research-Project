@@ -61,11 +61,22 @@ py -m pip install -r requirements.txt
 py -m streamlit run app.py
 ```
 
-## 7. Follow-up fixes (same day, second commit)
+## 7. Follow-up fixes (same day, later commits)
 
 - **Stale-bytecode ImportError fixed** — first launch failed with `cannot import name 'INSTRUCTOR_PASSCODE'` because OneDrive served an old `__pycache__/pipeline.pyc`; the cache folder was cleared (delete `__pycache__` if it ever recurs).
 - **UI spacing** — tab row no longer clips into the KPI cards; hero → cards → tabs are evenly spaced.
 - **PCA legend bug fixed** — a literal "undefined" rendered over the Structure-tab legend (Plotly title left undefined while themed); charts now always set a real title string, and horizontal legends got headroom so nothing overlaps.
-- **Light/dark mode switcher** — new ☀️ toggle at the top of the sidebar. Swaps the full look: CSS palette, every Plotly chart (via `set_chart_theme`), and Streamlit's native widget/dataframe colors at runtime. Dark stays the default.
-- **Explore filters simplified** — the two All/None buttons are now a single toggle per filter ("✕ Clear all" ⇄ "✓ Select all").
+- **Light/dark mode switcher** — toggle at the top of the sidebar swaps the full look at runtime: CSS palette, every Plotly chart (via `set_chart_theme`), and Streamlit's native widget/dataframe colors. **Light mode is the default (toggle off); switching it on enables dark mode.** The label and icon follow the current mode — "☀️ Light mode" while light, "🌙 Dark mode" while dark.
+- **Light-mode layout shift fixed** — theme CSS is injected as a single element (a second style element was adding one flex-gap slot, nudging light mode ~16px lower than dark).
+- **Explore filters simplified** — the two All/None buttons are now one toggle per filter ("✕ Clear all" ⇄ "✓ Select all"). The flip happens in an `on_click` callback, so the button's label and its action never lag a click behind.
 - Branch `secondmain` updated with all of the above — push with `git push -u origin secondmain`.
+
+## 8. Instructor mode — what it is and how to use it
+
+The app never displays personally identifying columns (**Email, Name, Members**) in any student-facing table — Dr. Fry-Petit asked that students not engage with that information even though the class still collects it. Instructor mode is the teaching team's override.
+
+**To unlock:** open **🔑 Instructor mode** at the bottom of the sidebar, enter the passcode, and click **Unlock**. While unlocked, the contact and group-member columns appear in the Check tab's cleaned table and entry previews, the email-vs-member-list validation checks become visible, and the hero banner shows a 🔓 chip as a reminder. **Lock again** (or closing the browser tab) hides everything again — unlocking lasts only for that browser session.
+
+**Passcode:** set as `INSTRUCTOR_PASSCODE` near the top of `pipeline.py` (currently `CHEM120-instructor`). Change it before sharing the app beyond the teaching team — it is not stored securely, just kept out of students' way.
+
+**What it does NOT change:** the underlying data and the Export downloads are identical either way. Full instructor downloads always include contact info; the "no contact info" CSV stays scrubbed; the HTML class report contains aggregates only.
