@@ -1544,14 +1544,15 @@ def main() -> None:
 
     # ----- Sidebar: theme, data source + controls -----
     st.sidebar.markdown("## 🧪 CHEM 120")
-    # Label shows the mode you'd switch TO: sun while dark, moon while light.
-    _is_light_now = st.session_state.get("light_mode", False)
-    light_mode = st.sidebar.toggle(
-        "🌙 Dark mode" if _is_light_now else "☀️ Light mode",
-        key="light_mode",
+    # Dark-mode switch: ON = dark (the default), OFF = light. The label and icon
+    # follow the current mode — moon while dark, sun while light.
+    st.session_state.setdefault("dark_mode", True)
+    dark_mode = st.sidebar.toggle(
+        "🌙 Dark mode" if st.session_state["dark_mode"] else "☀️ Light mode",
+        key="dark_mode",
         help="Switch between the dark lab theme and a bright classroom-friendly look.",
     )
-    theme_mode = "light" if light_mode else "dark"
+    theme_mode = "dark" if dark_mode else "light"
     sync_streamlit_theme(theme_mode)   # reruns once when the toggle flips
     set_chart_theme(theme_mode)
     inject_css(theme_mode)
