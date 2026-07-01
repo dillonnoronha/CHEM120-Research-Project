@@ -109,13 +109,38 @@ FRONT_COLUMNS = [
 # the student-facing UI never displays them.
 PRIVATE_COLUMNS = ["Email", "Name", "Members"]
 
-# ----- Shared chart styling (dark "lab glass" theme) ------------------------
+# ----- Shared chart styling (theme-aware) ------------------------------------
+# Defaults are the dark "lab glass" palette; set_chart_theme("light") swaps the
+# module-level values so every plot function picks up the active theme.
 CHART_INK = "#dbe4f3"        # main text on charts
 CHART_MUTED = "#8fa1bd"      # secondary text
 CHART_GRID = "rgba(148, 163, 184, 0.14)"
 CHART_ACCENT = "#38bdf8"     # sky
 CHART_ACCENT_2 = "#8b5cf6"   # violet
+CHART_HOVER_BG = "#111a2e"   # hover tooltip background
+CHART_BAR_LOW = "#1c3a5e"    # low end of sequential bar colorscales
 CHART_FONT = "Inter, -apple-system, 'Segoe UI', sans-serif"
+
+_CHART_THEMES = {
+    "dark": {
+        "CHART_INK": "#dbe4f3", "CHART_MUTED": "#8fa1bd",
+        "CHART_GRID": "rgba(148, 163, 184, 0.14)",
+        "CHART_ACCENT": "#38bdf8", "CHART_ACCENT_2": "#8b5cf6",
+        "CHART_HOVER_BG": "#111a2e", "CHART_BAR_LOW": "#1c3a5e",
+    },
+    "light": {
+        "CHART_INK": "#24324a", "CHART_MUTED": "#5b6b85",
+        "CHART_GRID": "rgba(15, 23, 42, 0.10)",
+        "CHART_ACCENT": "#0284c7", "CHART_ACCENT_2": "#7c3aed",
+        "CHART_HOVER_BG": "#ffffff", "CHART_BAR_LOW": "#bcd7f0",
+    },
+}
+
+
+def set_chart_theme(mode: str) -> None:
+    """Switch every chart's colors between 'dark' and 'light' (app theme toggle)."""
+
+    globals().update(_CHART_THEMES["light" if mode == "light" else "dark"])
 
 # Categorical palette used across all charts.
 CHART_PALETTE = [
@@ -1761,20 +1786,27 @@ def label_count_table(
 
 
 def _apply_chart_theme(fig: go.Figure, title: str = "", height: int = 420) -> go.Figure:
-    """Apply the shared dark 'lab glass' look to a Plotly figure."""
+    """Apply the shared theme-aware look to a Plotly figure."""
+
+    # title_text is ALWAYS set to a real string: leaving it undefined while other
+    # title/template properties exist makes plotly.js render the literal word
+    # "undefined" over the top-left of the chart.
+    if title:
+        fig.update_layout(title={"text": title,
+                                 "font": {"size": 16, "color": CHART_INK, "family": CHART_FONT}})
+    else:
+        fig.update_layout(title_text="")
 
     fig.update_layout(
-        title={"text": title, "font": {"size": 16, "color": "#e8eefb", "family": CHART_FONT}}
-        if title else None,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font={"family": CHART_FONT, "color": CHART_INK, "size": 12},
         height=height,
         margin={"l": 10, "r": 10, "t": 48 if title else 16, "b": 10},
         hoverlabel={
-            "bgcolor": "#111a2e",
-            "bordercolor": "rgba(56,189,248,0.45)",
-            "font": {"family": CHART_FONT, "color": "#e8eefb", "size": 12},
+            "bgcolor": CHART_HOVER_BG,
+            "bordercolor": CHART_ACCENT,
+            "font": {"family": CHART_FONT, "color": CHART_INK, "size": 12},
         },
         colorway=CHART_PALETTE,
         legend={"bgcolor": "rgba(0,0,0,0)", "font": {"color": CHART_MUTED}},
@@ -1806,7 +1838,7 @@ def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabe
             orientation="h",
             marker={
                 "color": values,
-                "colorscale": [[0.0, "#1c3a5e"], [1.0, CHART_ACCENT]],
+                "colorscale": [[0.0, CHART_BAR_LOW], [1.0, CHART_ACCENT]],
                 "line": {"width": 0},
             },
             hovertemplate="<b>%{y}</b><br>" + ylabel + ": %{x:.3f}<extra></extra>",
@@ -2171,7 +2203,7 @@ def plot_confusion(confusion: Dict[str, int]) -> go.Figure:
         z=z,
         x=["Predicted no", "Predicted yes"],
         y=["Actual no", "Actual yes"],
-        colorscale=[[0.0, "#13233f"], [1.0, CHART_ACCENT]],
+        colorscale=[[0.0, CHART_BAR_LOW], [1.0, CHART_ACCENT]],
         xgap=3, ygap=3, showscale=False,
         texttemplate="%{z}", textfont={"size": 16},
         hovertemplate="%{y} · %{x}: <b>%{z}</b><extra></extra>",
@@ -2206,7 +2238,9 @@ def plot_what_if(sweep: pd.DataFrame, x_label: str, current_value: float) -> go.
     fig.update_xaxes(title_text=x_label, title_font={"color": CHART_MUTED})
     fig.update_yaxes(range=[-0.02, 1.02], tickformat=".0%")
     fig.update_layout(legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0})
-    return _apply_chart_theme(fig, height=380)
+    fig = _apply_chart_theme(fig, height=380)
+    fig.update_layout(margin={"t": 56})   # headroom so the legend never overlaps
+    return fig
 
 
 def nearest_neighbors(df: pd.DataFrame, pred_row: pd.DataFrame, k: int = 5) -> pd.DataFrame:
@@ -2871,7 +2905,9 @@ def plot_pca_scatter(coords: pd.DataFrame, color_by: str = "Bubble") -> go.Figur
 
     fig.update_xaxes(title_text="PC1", title_font={"color": CHART_MUTED})
     fig.update_yaxes(title_text="PC2", title_font={"color": CHART_MUTED})
-    return _apply_chart_theme(fig, height=520)
+    fig = _apply_chart_theme(fig, height=520)
+    fig.update_layout(margin={"t": 56})   # headroom so the legend never overlaps
+    return fig
 
 
 # =============================================================================

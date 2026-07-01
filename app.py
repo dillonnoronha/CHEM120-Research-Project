@@ -84,6 +84,7 @@ from pipeline import (
     read_local_table,
     read_table_from_bytes,
     remove_invalid_element_rows,
+    set_chart_theme,
     summarize_by_element,
     valid_element_symbols,
     train_ml_model,
@@ -97,13 +98,49 @@ PLOTLY_CONFIG = {
     "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d", "zoomIn2d", "zoomOut2d"],
 }
 
+# Streamlit native-widget colors per theme (dataframes, inputs, tabs base, \u2026).
+# Applied at runtime via streamlit.config so the \u2600\ufe0f/\U0001f319 toggle restyles everything.
+_ST_THEME_OPTIONS = {
+    "dark": {
+        "theme.base": "dark",
+        "theme.primaryColor": "#38bdf8",
+        "theme.backgroundColor": "#0a0f1c",
+        "theme.secondaryBackgroundColor": "#111a2e",
+        "theme.textColor": "#e2e8f0",
+    },
+    "light": {
+        "theme.base": "light",
+        "theme.primaryColor": "#0284c7",
+        "theme.backgroundColor": "#f5f7fb",
+        "theme.secondaryBackgroundColor": "#ffffff",
+        "theme.textColor": "#1a2233",
+    },
+}
+
+
+def sync_streamlit_theme(mode: str) -> None:
+    """Swap Streamlit's native theme at runtime, rerunning once so it takes effect."""
+
+    st.session_state.setdefault("_applied_theme", "dark")
+    if st.session_state["_applied_theme"] == mode:
+        return
+    try:
+        from streamlit import config as _st_config
+        for key, value in _ST_THEME_OPTIONS[mode].items():
+            _st_config.set_option(key, value)
+    except Exception:
+        # Internal API unavailable: CSS + chart themes still switch below.
+        pass
+    st.session_state["_applied_theme"] = mode
+    st.rerun()
+
 
 # =============================================================================
 # PAGE STYLE — dark "lab glass" theme with micro-animations
 # =============================================================================
 
-def inject_css() -> None:
-    """Inject the app-wide CSS. Base colors come from .streamlit/config.toml."""
+def inject_css(mode: str = "dark") -> None:
+    """Inject the app-wide CSS; `mode` switches between the dark and light looks."""
 
     st.markdown(
         """
@@ -397,6 +434,81 @@ def inject_css() -> None:
         unsafe_allow_html=True,
     )
 
+    if mode == "light":
+        st.markdown(_LIGHT_CSS_OVERRIDES, unsafe_allow_html=True)
+
+
+# Light-mode overrides: same selectors as the base (dark) CSS, injected after it
+# so the cascade wins. Native widget colors are handled by sync_streamlit_theme().
+_LIGHT_CSS_OVERRIDES = """
+<style>
+:root {
+    --ink: #1a2233;
+    --muted: #5b6b85;
+    --accent: #0284c7;
+    --accent-2: #7c3aed;
+    --card-bg: rgba(255, 255, 255, 0.8);
+    --card-border: rgba(15, 23, 42, 0.12);
+}
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(1100px 700px at 88% -12%, rgba(2, 132, 199, 0.10), transparent 60%),
+        radial-gradient(900px 650px at -8% 108%, rgba(124, 58, 237, 0.08), transparent 55%),
+        radial-gradient(700px 500px at 55% 120%, rgba(14, 165, 233, 0.05), transparent 60%);
+}
+.hero {
+    background: linear-gradient(160deg, #ffffff, #eef3fb);
+    box-shadow: 0 14px 40px rgba(100, 116, 139, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.hero::before { background: radial-gradient(circle, rgba(2, 132, 199, 0.16), transparent 70%); }
+.hero::after  { background: radial-gradient(circle, rgba(124, 58, 237, 0.12), transparent 70%); }
+.hero-title {
+    background: linear-gradient(90deg, #0f172a 0%, #0369a1 45%, #6d28d9 75%, #0f172a 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.chip { color: #075985; border-color: rgba(2, 132, 199, 0.35); background: rgba(2, 132, 199, 0.07); }
+.glass-card, .soft-card, .feat-card { box-shadow: 0 8px 26px rgba(100, 116, 139, 0.16); }
+.kpi-icon {
+    background: linear-gradient(135deg, rgba(2, 132, 199, 0.10), rgba(124, 58, 237, 0.10));
+    border-color: rgba(2, 132, 199, 0.25);
+}
+.kpi-value {
+    background: linear-gradient(90deg, #0f172a, #0369a1);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.formula { color: #0369a1; }
+.prob-track { background: rgba(15, 23, 42, 0.10); }
+.prob-fill { box-shadow: 0 0 12px rgba(2, 132, 199, 0.3); }
+.stTabs [data-baseweb="tab"] { background: #eef2f9; }
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(2, 132, 199, 0.14), rgba(124, 58, 237, 0.12)) !important;
+    border-color: rgba(2, 132, 199, 0.5) !important;
+    color: #075985 !important;
+    box-shadow: 0 0 16px rgba(2, 132, 199, 0.15);
+}
+.stButton > button, [data-testid="stDownloadButton"] > button, [data-testid="stFormSubmitButton"] > button {
+    background: #ffffff;
+}
+.stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"],
+[data-testid="stDownloadButton"] > button[kind="primary"] {
+    background: linear-gradient(135deg, #0ea5e9, #6366f1);
+}
+button[data-testid="stBaseButton-pills"], button[kind="pills"] { background: #eef2f9 !important; }
+button[data-testid="stBaseButton-pillsActive"], button[kind="pillsActive"] {
+    background: linear-gradient(135deg, rgba(2, 132, 199, 0.16), rgba(124, 58, 237, 0.14)) !important;
+    border-color: rgba(2, 132, 199, 0.5) !important;
+    color: #075985 !important;
+}
+[data-testid="stExpander"] details { background: rgba(255, 255, 255, 0.65); }
+[data-testid="stSidebarContent"] { background: linear-gradient(180deg, #f4f7fc 0%, #eaeff8 100%); }
+::-webkit-scrollbar-thumb { background: #c3cfe2; }
+::-webkit-scrollbar-thumb:hover { background: #a9b9d6; }
+</style>
+"""
+
 
 # =============================================================================
 # SMALL UI HELPERS
@@ -480,11 +592,12 @@ def render_hero(chips: list[str] | None = None) -> None:
 
 def multi_pills_with_all_none(label: str, options: list[str], key: str) -> list[str]:
     """
-    A pills multi-select with All / None quick buttons (instructor request:
-    "say none and select only the one you want" instead of un-clicking each).
+    A pills multi-select with ONE toggle button (instructor request: "say none
+    and select only the one you want" instead of un-clicking each pill).
 
-    Returns the current selection. An EMPTY selection means "no filter" —
-    the caller shows everything and we surface a small hint.
+    The button flips between "Clear all" (when everything is selected) and
+    "Select all". An EMPTY selection means "no filter" — the caller shows
+    everything and we surface a small hint.
     """
 
     if not options:
@@ -494,12 +607,15 @@ def multi_pills_with_all_none(label: str, options: list[str], key: str) -> list[
     if key in st.session_state:
         st.session_state[key] = [v for v in st.session_state[key] if v in options]
 
-    head = st.columns([4, 0.7, 0.9])
+    currently_all = set(st.session_state.get(key, options)) == set(options)
+
+    head = st.columns([3.4, 1.6])
     head[0].markdown(f"**{label}**")
-    if head[1].button("All", key=f"{key}_all", help=f"Select every {label.lower()}"):
-        st.session_state[key] = list(options)
-    if head[2].button("None", key=f"{key}_none", help="Clear the selection, then pick just the ones you want"):
-        st.session_state[key] = []
+    toggle_label = "✕ Clear all" if currently_all else "✓ Select all"
+    toggle_help = ("Deselect everything, then click just the ones you want"
+                   if currently_all else f"Select every {label.lower()}")
+    if head[1].button(toggle_label, key=f"{key}_toggle", help=toggle_help, use_container_width=True):
+        st.session_state[key] = [] if currently_all else list(options)
 
     kwargs = {} if key in st.session_state else {"default": list(options)}
     selected = st.pills(label, options, selection_mode="multi", key=key,
@@ -1415,10 +1531,17 @@ def main() -> None:
 
     st.set_page_config(page_title=APP_TITLE, page_icon="🧪", layout="wide",
                        initial_sidebar_state="expanded")
-    inject_css()
 
-    # ----- Sidebar: data source + controls -----
+    # ----- Sidebar: theme, data source + controls -----
     st.sidebar.markdown("## 🧪 CHEM 120")
+    light_mode = st.sidebar.toggle(
+        "☀️ Light mode", value=False, key="light_mode",
+        help="Switch between the dark lab theme and a bright classroom-friendly look.",
+    )
+    theme_mode = "light" if light_mode else "dark"
+    sync_streamlit_theme(theme_mode)   # reruns once when the toggle flips
+    set_chart_theme(theme_mode)
+    inject_css(theme_mode)
     st.sidebar.caption("Upload class data, check it, then explore patterns.")
 
     st.sidebar.markdown('<div class="sb-section">Data</div>', unsafe_allow_html=True)
