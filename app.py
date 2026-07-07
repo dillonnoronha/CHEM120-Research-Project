@@ -1101,26 +1101,26 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
         with a1:
             pred_a = element_select("A element", "pred_a", default="La", optional=False)
         with a2:
-            pred_an = st.number_input("A ratio", value=2.0, min_value=0.0, step=0.5, key="pred_an")
+            pred_an = st.number_input("A moles", value=2.0, min_value=0.0, step=0.5, key="pred_an")
         with a3:
             pred_ap = element_select("A′ element", "pred_ap")
         with a4:
-            pred_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
+            pred_apn = st.number_input("A′ moles", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
 
         st.markdown("**B-site**")
         b1, b2, b3, b4 = st.columns(4)
         with b1:
             pred_b = element_select("B element", "pred_b", default="Ni", optional=False)
         with b2:
-            pred_bn = st.number_input("B ratio", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
+            pred_bn = st.number_input("B moles", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
         with b3:
             pred_bp = element_select("B′ element", "pred_bp")
         with b4:
-            pred_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
+            pred_bpn = st.number_input("B′ moles", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
 
         o1, o2, o3 = st.columns(3)
         with o1:
-            pred_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="pred_on")
+            pred_on = st.number_input("Oxygen moles", value=4.0, min_value=0.0, step=0.5, key="pred_on")
         with o2:
             pred_phase = st.selectbox("Phase", ["pure", "impure"], key="pred_phase")
 
@@ -1129,7 +1129,7 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
             with adv1:
                 pred_bdp = element_select("B″ element", "pred_bdp")
             with adv2:
-                pred_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
+                pred_bdpn = st.number_input("B″ moles", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
         predict_clicked = st.button("🔮 Predict bubble & purity", type="primary")
 
@@ -1189,11 +1189,11 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
         st.caption("Uses the compound entered above, varying ONE value across a range. "
                    "Great for questions like “would more oxygen help?”")
         sweep_options = {
-            "Oxygen ratio": ("on", 0.5, 8.0),
-            "A ratio": ("an", 0.5, 4.0),
-            "B ratio": ("bn", 0.5, 4.0),
-            "A′ ratio": ("apn", 0.0, 2.0),
-            "B′ ratio": ("bpn", 0.0, 2.0),
+            "Oxygen moles": ("on", 0.5, 8.0),
+            "A moles": ("an", 0.5, 4.0),
+            "B moles": ("bn", 0.5, 4.0),
+            "A′ moles": ("apn", 0.0, 2.0),
+            "B′ moles": ("bpn", 0.0, 2.0),
         }
         sweep_cols = st.columns([2, 1])
         with sweep_cols[0]:
@@ -1503,7 +1503,7 @@ def render_landing() -> None:
         <div class="glass-card" style="text-align:center; padding:2rem 1.6rem;">
             <div class="big-number">Load your class data to begin</div>
             <div class="helper-text" style="margin-top:0.5rem;">
-                Use <b>Data</b> in the sidebar — upload a CHEM 120 spreadsheet (CSV or Excel),
+                Use <b>Data</b> in the sidebar — upload a General Chemistry II spreadsheet (CSV or Excel),
                 or tick <b>"Load the bundled class dataset"</b> to explore right away.
             </div>
         </div>
@@ -1543,7 +1543,7 @@ def main() -> None:
                        initial_sidebar_state="expanded")
 
     # ----- Sidebar: theme, data source + controls -----
-    st.sidebar.markdown("## 🧪 CHEM 120")
+    st.sidebar.markdown("## 🧪 General Chemistry II")
     # Dark-mode switch: OFF = light (the default), ON = dark. The label and icon
     # follow the current mode — moon while dark, sun while light.
     st.session_state.setdefault("dark_mode", False)
@@ -1561,7 +1561,7 @@ def main() -> None:
     st.sidebar.markdown('<div class="sb-section">Data</div>', unsafe_allow_html=True)
     uploaded_data = st.sidebar.file_uploader(
         "Class spreadsheet", type=["csv", "xlsx", "xlsm", "xls"],
-        help="Upload Combined_Data.xlsx or another CHEM 120 survey/database file.",
+        help="Upload Combined_Data.xlsx or another General Chemistry II survey/database file.",
     )
     uploaded_atomic = None
     uploaded_en = None
