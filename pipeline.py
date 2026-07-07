@@ -60,7 +60,7 @@ except Exception:
 # All high-level settings live here so future students can change app behavior
 # without searching through the whole file.
 
-APP_TITLE = "CHEM 120 Catalyst Insight Studio"
+APP_TITLE = "General Chemistry II Catalyst Insight Studio"
 APP_SUBTITLE = "Turn class lab entries into clean formulas, visual trends, and testable hypotheses."
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -2362,7 +2362,7 @@ def build_html_report(stats: Dict[str, object],
         </ul>"""
 
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>CHEM 120 — Class Data Report</title>
+<html><head><meta charset="utf-8"><title>General Chemistry II — Class Data Report</title>
 <style>
   body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #1a2233; margin: 2.2rem auto; max-width: 880px; line-height: 1.5; }}
   h1 {{ font-size: 1.7rem; margin-bottom: 0.2rem; }}
@@ -2378,7 +2378,7 @@ def build_html_report(stats: Dict[str, object],
   .note {{ color: #5b6b85; font-style: italic; }}
   .disclaimer {{ margin-top: 2rem; padding: 0.8rem 1rem; background: #f5f8fd; border-left: 4px solid #7aa7e0; font-size: 0.85rem; color: #44526b; }}
 </style></head><body>
-<h1>CHEM 120 Catalyst Insight Studio — Class Data Report</h1>
+<h1>General Chemistry II Catalyst Insight Studio — Class Data Report</h1>
 <p class="sub">Generated {stats.get('generated', '')} · aggregates only, no student-identifying information</p>
 
 <div class="stats">
