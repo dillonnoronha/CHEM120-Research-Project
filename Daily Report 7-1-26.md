@@ -77,6 +77,6 @@ The app never displays personally identifying columns (**Email, Name, Members**)
 
 **To unlock:** open **🔑 Instructor mode** at the bottom of the sidebar, enter the passcode, and click **Unlock**. While unlocked, the contact and group-member columns appear in the Check tab's cleaned table and entry previews, the email-vs-member-list validation checks become visible, and the hero banner shows a 🔓 chip as a reminder. **Lock again** (or closing the browser tab) hides everything again — unlocking lasts only for that browser session.
 
-**Passcode:** set as `INSTRUCTOR_PASSCODE` near the top of `pipeline.py` (currently `CHEM120-instructor`). Change it before sharing the app beyond the teaching team — it is not stored securely, just kept out of students' way.
+**Passcode:** set as `INSTRUCTOR_PASSCODE` near the top of `pipeline.py`. It is not stored securely — anyone who can read the code can read it — so treat it as a convenience latch that keeps contact info out of students' way, not as real security.
 
 **What it does NOT change:** the underlying data and the Export downloads are identical either way. Full instructor downloads always include contact info; the "no contact info" CSV stays scrubbed; the HTML class report contains aggregates only.

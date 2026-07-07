@@ -157,7 +157,7 @@ OUTCOME_COLORS = {
 
 # Passcode for Instructor mode (reveals the hidden contact columns inside the
 # app). CHANGE THIS before sharing the app beyond the teaching team.
-INSTRUCTOR_PASSCODE = "CHEM120-instructor"
+INSTRUCTOR_PASSCODE = "chemprofessor123"
 
 # Shannon radius of O2- in six-fold coordination (Å), used by the Goldschmidt
 # tolerance factor.
