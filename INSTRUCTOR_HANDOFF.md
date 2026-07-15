@@ -26,7 +26,7 @@ Students use it in the browser; nothing is installed on their machines.
 | `DEVELOPER_NOTES.md` | For a future student maintainer — includes "when the Google Form changes" |
 | `STUDENT_GUIDE.md` | How students use each tab |
 
-The code lives on GitHub: **github.com/Batu-end/CHEM120-Research-Project**.
+The code lives on GitHub: **github.com/dillonnoronha/CHEM120-Research-Project**.
 Whoever maintains the app needs access to that repository.
 
 ## 3. The link students use
