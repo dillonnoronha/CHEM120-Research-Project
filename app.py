@@ -1,5 +1,5 @@
 """
-CHEM 120 Catalyst Insight Studio
+General Chemistry II Catalyst Insight Studio
 =================================
 
 Streamlit UI entry point. All data loading, cleaning, validation, descriptors,
@@ -1385,7 +1385,7 @@ def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outli
         purity if purity.get("ok") else None,
     )
     st.download_button("📄 Download class report (HTML)", report_bytes,
-                       file_name=f"chem120_class_report_{pd.Timestamp.now():%Y-%m-%d}.html",
+                       file_name=f"general_chemistry_ii_class_report_{pd.Timestamp.now():%Y-%m-%d}.html",
                        mime="text/html", type="primary")
 
     st.divider()
@@ -1395,22 +1395,22 @@ def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outli
         st.markdown("#### Cleaned data")
         st.download_button("Cleaned data (CSV)",
                            dataframe_to_csv_bytes(described_df[ordered_columns(described_df)]),
-                           file_name="chem120_cleaned_compound_data.csv", mime="text/csv")
+                           file_name="general_chemistry_ii_cleaned_compound_data.csv", mime="text/csv")
         st.download_button("Cleaned data (Excel)",
                            dataframe_to_excel_bytes(described_df[ordered_columns(described_df)], "Cleaned_Data"),
-                           file_name="chem120_cleaned_compound_data.xlsx",
+                           file_name="general_chemistry_ii_cleaned_compound_data.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         no_contact = public_view(described_df)
         st.download_button("Cleaned data — no contact info (CSV)",
                            dataframe_to_csv_bytes(no_contact[ordered_columns(no_contact)]),
-                           file_name="chem120_cleaned_public.csv", mime="text/csv",
+                           file_name="general_chemistry_ii_cleaned_public.csv", mime="text/csv",
                            help="Same data with emails, names, and member lists removed — safe to share.")
     with export_cols[1]:
         st.markdown("#### Reports")
         st.download_button("Validation report (CSV)", dataframe_to_csv_bytes(issues_df),
-                           file_name="chem120_validation_report.csv", mime="text/csv")
+                           file_name="general_chemistry_ii_validation_report.csv", mime="text/csv")
         st.download_button("Outlier report (CSV)", dataframe_to_csv_bytes(outlier_df),
-                           file_name="chem120_outlier_report.csv", mime="text/csv")
+                           file_name="general_chemistry_ii_outlier_report.csv", mime="text/csv")
 
     st.caption("🔒 The full downloads keep contact/group info for instructor records — the app itself "
                "never displays it. Use the no-contact-info file for anything student-facing.")

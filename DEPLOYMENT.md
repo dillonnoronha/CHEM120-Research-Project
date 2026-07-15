@@ -1,4 +1,4 @@
-# Deploying CHEM 120 Catalyst Insight Studio
+# Deploying General Chemistry II Catalyst Insight Studio
 
 This guide covers how a school can put the app online so students and instructors
 just open a link — no installing Python.

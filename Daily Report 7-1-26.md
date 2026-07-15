@@ -1,6 +1,6 @@
 # Daily Report — July 1, 2026
 
-**Project:** CHEM 120 Catalyst Insight Studio
+**Project:** General Chemistry II Catalyst Insight Studio
 **Author:** Dillon Noronha (with Claude)
 **Branch:** `secondmain`
 

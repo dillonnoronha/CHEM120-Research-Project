@@ -1,4 +1,4 @@
-# CHEM 120 Catalyst Insight Studio — boots in LIGHT mode (the 🌙 sidebar toggle
+# General Chemistry II Catalyst Insight Studio — boots in LIGHT mode (the 🌙 sidebar toggle
 # switches to the dark "lab glass" look at runtime).
 # Base colors live here; the glass cards, gradients, and animations are added
 # by inject_css() in app.py.
