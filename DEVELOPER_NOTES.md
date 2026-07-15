@@ -1,6 +1,6 @@
 # Developer Notes
 
-This file explains how the code is organized so future CHEM 120 students can update the app.
+This file explains how the code is organized so future General Chemistry II students can update the app.
 
 ## Code structure
 

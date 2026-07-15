@@ -651,7 +651,7 @@ class TestEdgeCases:
         assert not features.isna().any().any()
 
     def test_normalize_phase_with_old_wording(self):
-        """normalize_phase_label handles old CHEM 120 wording."""
+        """normalize_phase_label handles old General Chemistry II wording."""
         result = normalize_phase_label("pure phase/homogenous mixture")
         assert result == "pure"
 

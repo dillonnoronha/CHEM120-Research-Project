@@ -1,6 +1,6 @@
-# CHEM 120 Catalyst Insight Studio
+# General Chemistry II Catalyst Insight Studio
 
-Streamlit app for exploring CHEM 120 catalyst experiment data.
+Streamlit app for exploring General Chemistry II catalyst experiment data.
 
 ## Run
 
@@ -23,7 +23,7 @@ Windows shortcut: double-click `run_app_windows.bat`
 ## Upload format
 
 The app expects columns like `1A`, `1AN`, `1B`, `1BN`, `1O`, `1ON`, `1P`, `1Bub` (slots 1–4).
-Upload `Combined_Data.xlsx` or any CHEM 120 survey export.
+Upload `Combined_Data.xlsx` or any General Chemistry II survey export.
 
 ## Layout
 

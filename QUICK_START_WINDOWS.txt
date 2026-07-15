@@ -1,8 +1,8 @@
-CHEM 120 Catalyst Insight Studio - Quick Start for Windows
+General Chemistry II Catalyst Insight Studio - Quick Start for Windows
 ===========================================================
 
 1. Unzip this folder somewhere easy, such as:
-   C:\Users\YOURNAME\Desktop\CHEM120_Student_Friendly_Insight_Studio
+   C:\Users\YOURNAME\Desktop\CHEM120-Research-Project
 
 2. Open the folder.
 

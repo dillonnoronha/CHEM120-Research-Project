@@ -1,4 +1,4 @@
-# Deploying CHEM 120 Catalyst Insight Studio
+# Deploying General Chemistry II Catalyst Insight Studio
 
 This guide covers how a school can put the app online so students and instructors
 just open a link — no installing Python.
@@ -22,8 +22,9 @@ the data must stay private, use the password option below or host internally.
 
 1. Create a free account at https://share.streamlit.io using a GitHub login.
 2. Put this project in a GitHub repository (the instructor can own it). Make sure
-   these files are included: `app.py`, `pipeline.py`, `requirements.txt`, and the
-   `data/` folder with `AtomicMass.csv` and `Combined_Data.xlsx`.
+   these files are included: `app.py`, `pipeline.py`, `requirements.txt`,
+   `.streamlit/config.toml` (the theme), and the `data/` folder with
+   `AtomicMass.csv`, `PaulingEN.csv`, `ShannonRadii.csv`, and `Combined_Data.xlsx`.
 3. In Streamlit Cloud click **New app**, pick the repo, set the main file to
    `app.py`, and click **Deploy**.
 4. Share the resulting URL with the class.
@@ -34,6 +35,20 @@ automatically.
 **Optional password.** To keep it semi-private, in the app's Streamlit Cloud
 **Settings → Secrets** add a value and gate the app with a simple password check,
 or restrict viewers to specific emails under the app's sharing settings.
+
+### ⚠️ Privacy before deploying
+
+`Combined_Data.xlsx` contains student emails, names, and group members. The app
+never *displays* them (outside Instructor mode), but anyone who can see a public
+GitHub repo can open the raw file. Before deploying publicly, either:
+
+1. **Use a private GitHub repo** (Streamlit Cloud can deploy from private repos), or
+2. **Ship a scrubbed dataset**: open the app locally, go to **Export → Cleaned
+   data — no contact info (CSV)**, save that file as the repo's dataset instead,
+   and keep the full spreadsheet offline.
+
+Also change `INSTRUCTOR_PASSCODE` in `pipeline.py` before sharing the app —
+the default value is not a secret.
 
 ## Option B — Run locally on one computer (no internet)
 

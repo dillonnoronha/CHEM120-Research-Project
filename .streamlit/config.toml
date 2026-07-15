@@ -1,0 +1,15 @@
+# General Chemistry II Catalyst Insight Studio — boots in LIGHT mode (the 🌙 sidebar toggle
+# switches to the dark "lab glass" look at runtime).
+# Base colors live here; the glass cards, gradients, and animations are added
+# by inject_css() in app.py.
+
+[theme]
+base = "light"
+primaryColor = "#0284c7"
+backgroundColor = "#f5f7fb"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1a2233"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
