@@ -1,0 +1,60 @@
+Symbol,A_site_radius,B_site_radius,AssumedIonA,AssumedIonB,Note
+Na,1.39,1.02,Na+ (XII),Na+ (VI),
+K,1.64,1.38,K+ (XII),K+ (VI),
+Rb,1.72,1.52,Rb+ (XII),Rb+ (VI),
+Cs,1.88,1.67,Cs+ (XII),Cs+ (VI),
+Mg,,0.72,,Mg2+ (VI),
+Ca,1.34,1.00,Ca2+ (XII),Ca2+ (VI),
+Sr,1.44,1.18,Sr2+ (XII),Sr2+ (VI),
+Ba,1.61,1.35,Ba2+ (XII),Ba2+ (VI),
+Pb,1.49,1.19,Pb2+ (XII),Pb2+ (VI),
+La,1.36,1.03,La3+ (XII),La3+ (VI),
+Ce,1.34,0.87,Ce3+ (XII),Ce4+ (VI),
+Pr,1.29,0.99,Pr3+ (XII interp.),Pr3+ (VI),interpolated A-site value
+Nd,1.27,0.98,Nd3+ (XII),Nd3+ (VI),
+Sm,1.24,0.958,Sm3+ (XII),Sm3+ (VI),
+Eu,1.23,0.947,Eu3+ (XII interp.),Eu3+ (VI),interpolated A-site value
+Gd,1.21,0.938,Gd3+ (XII interp.),Gd3+ (VI),interpolated A-site value
+Tb,1.20,0.923,Tb3+ (XII interp.),Tb3+ (VI),interpolated A-site value
+Dy,1.19,0.912,Dy3+ (XII interp.),Dy3+ (VI),interpolated A-site value
+Y,1.19,0.90,Y3+ (XII interp.),Y3+ (VI),interpolated A-site value
+Ho,1.18,0.901,Ho3+ (XII interp.),Ho3+ (VI),interpolated A-site value
+Er,1.17,0.89,Er3+ (XII interp.),Er3+ (VI),interpolated A-site value
+Yb,1.16,0.868,Yb3+ (XII interp.),Yb3+ (VI),interpolated A-site value
+Bi,1.36,1.03,Bi3+ (XII approx.),Bi3+ (VI),commonly used approximation
+Ag,1.48,1.15,Ag+ (XII interp.),Ag+ (VI),interpolated A-site value
+Li,,0.76,,Li+ (VI),
+Sc,,0.745,,Sc3+ (VI),
+Ti,,0.605,,Ti4+ (VI),
+V,,0.64,,V3+ (VI),
+Cr,,0.615,,Cr3+ (VI),
+Mn,,0.645,,Mn3+ HS (VI),
+Fe,,0.645,,Fe3+ HS (VI),
+Co,,0.61,,Co3+ HS (VI),
+Ni,,0.69,,Ni2+ (VI),
+Cu,,0.73,,Cu2+ (VI),
+Zn,,0.74,,Zn2+ (VI),
+Ga,,0.62,,Ga3+ (VI),
+Ge,,0.53,,Ge4+ (VI),
+Al,,0.535,,Al3+ (VI),
+In,,0.80,,In3+ (VI),
+Sn,,0.69,,Sn4+ (VI),
+Sb,,0.60,,Sb5+ (VI),
+Zr,,0.72,,Zr4+ (VI),
+Nb,,0.64,,Nb5+ (VI),
+Mo,,0.59,,Mo6+ (VI),
+Ru,,0.62,,Ru4+ (VI),
+Rh,,0.665,,Rh3+ (VI),
+Pd,,0.86,,Pd2+ (VI),
+Cd,,0.95,,Cd2+ (VI),
+Hf,,0.71,,Hf4+ (VI),
+Ta,,0.64,,Ta5+ (VI),
+W,,0.60,,W6+ (VI),
+Re,,0.63,,Re4+ (VI),
+Ir,,0.625,,Ir4+ (VI),
+Pt,,0.625,,Pt4+ (VI),
+Au,,0.85,,Au3+ (VI),
+Hg,,1.02,,Hg2+ (VI),
+Tl,1.70,0.885,Tl+ (XII),Tl3+ (VI),
+Th,,0.94,,Th4+ (VI),
+U,,0.89,,U4+ (VI),

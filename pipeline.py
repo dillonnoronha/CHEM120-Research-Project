@@ -1,5 +1,5 @@
 """
-CHEM 120 Catalyst Insight Studio — Data Pipeline
+General Chemistry II Catalyst Insight Studio — Data Pipeline
 =================================================
 
 All data loading, cleaning, validation, descriptor calculation, plotting helpers,
@@ -27,7 +27,7 @@ Sections
 from __future__ import annotations
 
 # Build marker (bump to force Python to recompile if OneDrive serves a stale
-# __pycache__/*.pyc with an older source mtime): 2026-06-24c
+# __pycache__/*.pyc with an older source mtime): 2026-07-01a
 import difflib
 import io
 import math
@@ -35,16 +35,16 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score, f1_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
     from sklearn.preprocessing import StandardScaler
 
     SKLEARN_AVAILABLE = True
@@ -60,7 +60,7 @@ except Exception:
 # All high-level settings live here so future students can change app behavior
 # without searching through the whole file.
 
-APP_TITLE = "CHEM 120 Catalyst Insight Studio"
+APP_TITLE = "General Chemistry II Catalyst Insight Studio"
 APP_SUBTITLE = "Turn class lab entries into clean formulas, visual trends, and testable hypotheses."
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -70,12 +70,12 @@ DATA_DIR = ROOT_DIR / "data"
 # "slot" such as 1A, 1AN, 2A, 2AN, etc.
 COMPOUND_SLOTS = [1, 2, 3, 4]
 
-# CHEM 120 project label conversions.
+# General Chemistry II project label conversions.
 # Keeping these dictionaries near the top makes the app easy to adapt if the
 # class changes its coding scheme later.
 # Phase is normalized before encoding so older survey wording such as
 # "pure phase/homogenous mixture" does not create messy graph labels.
-# CHEM 120 officially uses impure -> 1 and pure -> 2; not made -> 0 is
+# General Chemistry II officially uses impure -> 1 and pure -> 2; not made -> 0 is
 # included to handle older/raw survey exports safely.
 PHASE_MAP = {"not made": 0, "impure": 1, "pure": 2}
 BUBBLE_MAP = {"maybe": 0, "yes": 1, "no": 2}
@@ -103,6 +103,65 @@ FRONT_COLUMNS = [
     "A", "AN", "AP", "APN", "B", "BN", "BP", "BPN", "BDP", "BDPN",
     "O", "ON", "P", "Bub", "PhaseN", "BubN",
 ]
+
+# Personal / group-identifying columns. Instructor feedback (June 2026): the app
+# still COLLECTS these (they stay in the data and in instructor downloads) but
+# the student-facing UI never displays them.
+PRIVATE_COLUMNS = ["Email", "Name", "Members"]
+
+# ----- Shared chart styling (theme-aware) ------------------------------------
+# Defaults are the dark "lab glass" palette; set_chart_theme("light") swaps the
+# module-level values so every plot function picks up the active theme.
+CHART_INK = "#dbe4f3"        # main text on charts
+CHART_MUTED = "#8fa1bd"      # secondary text
+CHART_GRID = "rgba(148, 163, 184, 0.14)"
+CHART_ACCENT = "#38bdf8"     # sky
+CHART_ACCENT_2 = "#8b5cf6"   # violet
+CHART_HOVER_BG = "#111a2e"   # hover tooltip background
+CHART_BAR_LOW = "#1c3a5e"    # low end of sequential bar colorscales
+CHART_FONT = "Inter, -apple-system, 'Segoe UI', sans-serif"
+
+_CHART_THEMES = {
+    "dark": {
+        "CHART_INK": "#dbe4f3", "CHART_MUTED": "#8fa1bd",
+        "CHART_GRID": "rgba(148, 163, 184, 0.14)",
+        "CHART_ACCENT": "#38bdf8", "CHART_ACCENT_2": "#8b5cf6",
+        "CHART_HOVER_BG": "#111a2e", "CHART_BAR_LOW": "#1c3a5e",
+    },
+    "light": {
+        "CHART_INK": "#24324a", "CHART_MUTED": "#5b6b85",
+        "CHART_GRID": "rgba(15, 23, 42, 0.10)",
+        "CHART_ACCENT": "#0284c7", "CHART_ACCENT_2": "#7c3aed",
+        "CHART_HOVER_BG": "#ffffff", "CHART_BAR_LOW": "#bcd7f0",
+    },
+}
+
+
+def set_chart_theme(mode: str) -> None:
+    """Switch every chart's colors between 'dark' and 'light' (app theme toggle)."""
+
+    globals().update(_CHART_THEMES["light" if mode == "light" else "dark"])
+
+# Categorical palette used across all charts.
+CHART_PALETTE = [
+    "#38bdf8", "#fbbf24", "#34d399", "#f87171", "#a78bfa",
+    "#22d3ee", "#f472b6", "#facc15", "#94a3b8", "#fb923c",
+]
+
+# Fixed colors for outcome labels so Yes/Pure are always green, etc.
+OUTCOME_COLORS = {
+    "Yes": "#34d399", "No": "#f87171", "Maybe": "#fbbf24",
+    "Pure": "#34d399", "Impure": "#fbbf24", "Not made": "#f87171",
+    "Missing": "#64748b", "Other / needs review": "#94a3b8",
+}
+
+# Passcode for Instructor mode (reveals the hidden contact columns inside the
+# app). CHANGE THIS before sharing the app beyond the teaching team.
+INSTRUCTOR_PASSCODE = "chemprofessor123"
+
+# Shannon radius of O2- in six-fold coordination (Å), used by the Goldschmidt
+# tolerance factor.
+OXYGEN_RADIUS = 1.40
 
 
 # =============================================================================
@@ -149,7 +208,7 @@ def normalize_phase_label(value: object) -> str:
     Convert raw phase wording into a small set of clean categories.
 
     Why this exists:
-    Older CHEM 120 spreadsheets sometimes use long phase descriptions such as
+    Older General Chemistry II spreadsheets sometimes use long phase descriptions such as
     "pure phase/homogenous mixture" or "did not make compound X/it melted to the
     crucible". If those raw strings are plotted directly, the Phase Counts graph
     becomes unreadable. This helper maps those long answers to clear labels.
@@ -310,6 +369,18 @@ def ordered_columns(df: pd.DataFrame, preferred: Sequence[str] = FRONT_COLUMNS) 
     return first + rest
 
 
+def public_view(df: pd.DataFrame, extra_hidden: Sequence[str] = ()) -> pd.DataFrame:
+    """
+    Return a copy of df without personal/group-identifying columns.
+
+    Every st.dataframe the app SHOWS should pass through this helper. The data
+    itself is untouched — instructor downloads in the Export tab keep everything.
+    """
+
+    hidden = set(PRIVATE_COLUMNS) | set(extra_hidden)
+    return df[[c for c in df.columns if c not in hidden]]
+
+
 # =============================================================================
 # 3. REFERENCE TABLES
 # =============================================================================
@@ -412,6 +483,36 @@ def load_en_table_from_bytes(file_bytes: Optional[bytes], file_name: str = "") -
         return en.dropna(subset=["Symbol"]).drop_duplicates("Symbol")
 
     return pd.DataFrame(columns=["Symbol", "Electronegativity"])
+
+
+@st.cache_data(show_spinner=False)
+def load_radii_table_from_bytes(file_bytes: Optional[bytes] = None, file_name: str = "") -> pd.DataFrame:
+    """
+    Load the Shannon ionic radii table (data/ShannonRadii.csv).
+
+    Columns: Symbol, A_site_radius (12-coordinate, Å), B_site_radius
+    (6-coordinate, Å). Values assume the most common oxidation state for
+    perovskite chemistry (see the AssumedIon columns in the CSV) — a documented
+    teaching approximation, since the spreadsheet doesn't record oxidation states.
+    Returns an empty DataFrame when the file is missing so the app still runs.
+    """
+
+    if not file_bytes:
+        local_path = DATA_DIR / "ShannonRadii.csv"
+        if not local_path.exists():
+            return pd.DataFrame(columns=["Symbol", "A_site_radius", "B_site_radius"])
+        data = local_path.read_bytes()
+    else:
+        data = file_bytes
+
+    radii = pd.read_csv(io.BytesIO(data))
+    if "Symbol" not in radii.columns:
+        return pd.DataFrame(columns=["Symbol", "A_site_radius", "B_site_radius"])
+
+    radii["Symbol"] = radii["Symbol"].astype(str).str.strip()
+    for col in ["A_site_radius", "B_site_radius"]:
+        radii[col] = pd.to_numeric(radii.get(col), errors="coerce")
+    return radii[["Symbol", "A_site_radius", "B_site_radius"]].dropna(subset=["Symbol"]).drop_duplicates("Symbol")
 
 
 def make_element_maps(atomic: pd.DataFrame) -> Tuple[Dict[str, str], set]:
@@ -1085,7 +1186,7 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
 @st.cache_data(show_spinner=False)
 def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.DataFrame:
     """
-    Check cleaned rows against the CHEM 120 data-entry rules.
+    Check cleaned rows against the General Chemistry II data-entry rules.
 
     Future update point:
     Add new validation checks inside this function if the lab template changes.
@@ -1418,13 +1519,17 @@ def weighted_average(values: Sequence[float], weights: Sequence[float]) -> float
 
 
 @st.cache_data(show_spinner=False)
-def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame) -> pd.DataFrame:
+def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame,
+                             radii_table: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Add calculated chemistry descriptors.
 
+    radii_table (optional) enables the Goldschmidt tolerance factor. When None,
+    the bundled data/ShannonRadii.csv is loaded automatically.
+
     Future update point:
-    Add new descriptors here, such as ionic radius, oxidation state estimates,
-    tolerance factor, electronegativity difference, or group/period features.
+    Add new descriptors here, such as oxidation state estimates or group/period
+    features.
     """
 
     if clean_df.empty:
@@ -1565,6 +1670,44 @@ def add_chemical_descriptors(clean_df: pd.DataFrame, atomic: pd.DataFrame, en_ta
     df["B_mix_fraction"] = df.apply(
         lambda r: _dopant_fraction(r, ("B", "BN"), [("BP", "BPN"), ("BDP", "BDPN")]), axis=1)
 
+    # ----- Goldschmidt tolerance factor --------------------------------------
+    # t = (r_A + r_O) / (sqrt(2) * (r_B + r_O)) with ratio-weighted site radii.
+    # t ~ 0.9-1.0 suggests an ideal cubic perovskite; below ~0.9 distorted;
+    # above ~1.0 hexagonal tendencies. Radii come from data/ShannonRadii.csv
+    # (typical oxidation states — a documented teaching approximation).
+    if radii_table is None:
+        radii_table = load_radii_table_from_bytes(None)
+
+    if not radii_table.empty:
+        radii_index = radii_table.set_index("Symbol")
+
+        def _site_radius(row: pd.Series, fields: Sequence[Tuple[str, str]], col: str) -> float:
+            values, weights = [], []
+            for symbol_col, ratio_col in fields:
+                symbol = clean_text(row.get(symbol_col, ""))
+                if not symbol:
+                    continue
+                radius = (float(radii_index.loc[symbol, col])
+                          if symbol in radii_index.index else np.nan)
+                values.append(radius)
+                weights.append(ratio_for_formula(row, symbol_col, ratio_col,
+                                                 required=(symbol_col in {"A", "B"})))
+            return weighted_average(values, weights)
+
+        df["A_site_radius"] = df.apply(lambda r: _site_radius(r, A_SITE_FIELDS, "A_site_radius"), axis=1)
+        df["B_site_radius"] = df.apply(lambda r: _site_radius(r, B_SITE_FIELDS, "B_site_radius"), axis=1)
+        df["Tolerance_factor"] = (df["A_site_radius"] + OXYGEN_RADIUS) / (
+            math.sqrt(2) * (df["B_site_radius"] + OXYGEN_RADIUS))
+
+    # Median-fill sparse physics descriptors so ML's fillna(0) never injects a
+    # nonsense zero (t = 0 or EN = 0 would be a strong, wrong signal).
+    for sparse_col in ["Tolerance_factor", "A_site_radius", "B_site_radius",
+                       "A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A"]:
+        if sparse_col in df.columns:
+            median = pd.to_numeric(df[sparse_col], errors="coerce").median()
+            if not np.isnan(median):
+                df[sparse_col] = df[sparse_col].fillna(median)
+
     return df
 
 
@@ -1642,107 +1785,68 @@ def label_count_table(
     return out
 
 
-def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str):
-    """Return a clean matplotlib bar chart with readable, angled tick labels."""
+def _apply_chart_theme(fig: go.Figure, title: str = "", height: int = 420) -> go.Figure:
+    """Apply the shared theme-aware look to a Plotly figure."""
 
-    fig, ax = plt.subplots(figsize=(8, 4.2))
-    plot_data = data[[x_col, y_col]].dropna().head(12)
-    ax.bar(plot_data[x_col].astype(str), plot_data[y_col], color="#0071e3")
-    ax.set_title(title, fontsize=13, fontweight="bold")
-    ax.set_ylabel(ylabel)
-    ax.set_xlabel("")
+    # title_text is ALWAYS set to a real string: leaving it undefined while other
+    # title/template properties exist makes plotly.js render the literal word
+    # "undefined" over the top-left of the chart.
+    if title:
+        fig.update_layout(title={"text": title,
+                                 "font": {"size": 16, "color": CHART_INK, "family": CHART_FONT}})
+    else:
+        fig.update_layout(title_text="")
 
-    # Label angle fix (#6/#9): rotate to 30 degrees and right-anchor so long
-    # feature names line up under their bars instead of overlapping.
-    labels = ax.get_xticklabels()
-    n_labels = len(plot_data)
-    rotation = 0 if n_labels <= 4 else 30
-    ax.set_xticklabels(labels, rotation=rotation, ha="right" if rotation else "center",
-                       rotation_mode="anchor", fontsize=9)
-    ax.grid(axis="y", alpha=0.25)
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
-    fig.tight_layout()
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"family": CHART_FONT, "color": CHART_INK, "size": 12},
+        height=height,
+        margin={"l": 10, "r": 10, "t": 48 if title else 16, "b": 10},
+        hoverlabel={
+            "bgcolor": CHART_HOVER_BG,
+            "bordercolor": CHART_ACCENT,
+            "font": {"family": CHART_FONT, "color": CHART_INK, "size": 12},
+        },
+        colorway=CHART_PALETTE,
+        legend={"bgcolor": "rgba(0,0,0,0)", "font": {"color": CHART_MUTED}},
+    )
+    fig.update_xaxes(gridcolor=CHART_GRID, zerolinecolor=CHART_GRID, linecolor=CHART_GRID,
+                     tickfont={"color": CHART_MUTED})
+    fig.update_yaxes(gridcolor=CHART_GRID, zerolinecolor=CHART_GRID, linecolor=CHART_GRID,
+                     tickfont={"color": CHART_MUTED})
     return fig
 
 
-def plot_distribution(
-    df: pd.DataFrame,
-    column: str,
-    title: str,
-    preferred_order: Optional[Sequence[str]] = None,
-):
+def plot_bar_chart(data: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str) -> go.Figure:
     """
-    Return a readable count chart for labels such as phase or bubble response.
+    Interactive horizontal bar chart (used for model feature importance).
 
-    IMPORTANT FIX:
-    The first version of the app used vertical bars for Phase counts. Raw
-    Microsoft Forms phase labels can be very long, so the x-axis became unreadable.
-    This function now uses a HORIZONTAL bar chart. Horizontal labels have enough
-    space, and phase labels are also normalized again inside this plotting helper
-    as a safety net.
-
-    Future developers:
-    - Keep this as a horizontal chart for text-heavy categories.
-    - If the survey adds new wording, update `normalize_phase_label()` above.
+    Horizontal bars keep long feature names readable; hover shows exact values.
+    The x_col/y_col argument order is kept from the old matplotlib version so
+    callers don't change: x_col = category names, y_col = numeric values.
     """
 
-    if column not in df.columns or df.empty:
-        fig, ax = plt.subplots(figsize=(8, 3.8))
-        ax.set_title(title, fontsize=13, fontweight="bold")
-        ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
-        ax.axis("off")
-        return fig
+    plot_data = data[[x_col, y_col]].dropna().head(12).iloc[::-1]  # biggest ends up on top
+    labels = plot_data[x_col].astype(str).map(friendly_label)
+    values = plot_data[y_col].astype(float)
 
-    series = df[column].copy()
-
-    # Safety net: if this is the Phase chart, collapse raw phrases like
-    # "pure phase/homogenous mixture" before counting. This prevents the graph
-    # from ever plotting long raw phase phrases.
-    is_phase_chart = "phase" in title.lower() or column.lower() in {"p", "phase", "phaselabel", "p_raw"}
-    is_bubble_chart = "bubble" in title.lower() or column.lower() in {"bub", "bubble", "bubblelabel", "bub_raw"}
-
-    if is_phase_chart:
-        series = series.apply(lambda value: display_label(normalize_phase_label(value)))
-    elif is_bubble_chart:
-        series = series.apply(lambda value: display_label(normalize_bubble_label(value)))
-    else:
-        series = series.apply(display_label)
-
-    counts = series.replace("", "Missing").fillna("Missing").astype(str).value_counts()
-
-    # Put common categories in a stable, student-friendly order. Any unexpected
-    # categories still appear at the end so data problems remain visible.
-    if preferred_order:
-        ordered_labels = [label for label in preferred_order if label in counts.index]
-        extra_labels = sorted([label for label in counts.index if label not in ordered_labels])
-        labels = ordered_labels + extra_labels
-        counts = counts.reindex(labels)
-    else:
-        counts = counts.sort_index()
-
-    # Horizontal bars fix label overlap because category names are on the y-axis.
-    fig_height = max(3.4, min(7.0, 0.55 * len(counts) + 1.4))
-    fig, ax = plt.subplots(figsize=(8.5, fig_height))
-
-    y_positions = np.arange(len(counts))
-    ax.barh(y_positions, counts.values)
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(counts.index)
-    ax.invert_yaxis()
-
-    ax.set_title(title, fontsize=13, fontweight="bold")
-    ax.set_xlabel("Number of compounds")
-    ax.set_ylabel("")
-    ax.grid(axis="x", alpha=0.25)
-
-    # Add numeric labels to the end of each bar for easier reading.
-    max_count = max(counts.values) if len(counts) else 0
-    for y, value in zip(y_positions, counts.values):
-        ax.text(value + max(max_count * 0.01, 0.5), y, str(int(value)), va="center", fontsize=9)
-
-    fig.tight_layout()
-    return fig
+    fig = go.Figure(
+        go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker={
+                "color": values,
+                "colorscale": [[0.0, CHART_BAR_LOW], [1.0, CHART_ACCENT]],
+                "line": {"width": 0},
+            },
+            hovertemplate="<b>%{y}</b><br>" + ylabel + ": %{x:.3f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title_text=ylabel, title_font={"color": CHART_MUTED, "size": 12})
+    height = max(300, 30 * len(plot_data) + 110)
+    return _apply_chart_theme(fig, title=title, height=height)
 
 
 def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -1757,7 +1861,8 @@ def numeric_correlation_table(df: pd.DataFrame) -> pd.DataFrame:
         "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
         "Cation_count", "N_B_elements", "A_mix_fraction", "B_mix_fraction",
     ]
-    candidates += [c for c in ["A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A"] if c in df.columns]
+    candidates += [c for c in ["A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A",
+                               "Tolerance_factor", "A_site_radius", "B_site_radius"] if c in df.columns]
 
     numeric_cols = [c for c in candidates if c in df.columns]
     numeric = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
@@ -1787,71 +1892,523 @@ def friendly_label(name: str) -> str:
         "Avg_cation_Z": "Avg cation #", "Avg_cation_mass": "Avg cation mass",
         "Cation_count": "# cations", "N_B_elements": "# B elements",
         "A_mix_fraction": "A mixing frac", "B_mix_fraction": "B mixing frac",
+        "A_avg_EN": "A electroneg", "B_avg_EN": "B electroneg",
+        "EN_difference_B_minus_A": "EN diff (B−A)",
+        "A_total_ratio": "A-site total", "B_total_ratio": "B-site total",
+        "Tolerance_factor": "Tolerance factor",
+        "A_site_radius": "A ionic radius", "B_site_radius": "B ionic radius",
     }
     return pretty.get(name, name)
 
 
-def plot_heatmap(corr: pd.DataFrame):
-    """Return a beginner-friendly correlation heatmap figure."""
+# Plain-English definition for every feature that can appear on the heatmap or
+# in the model. Shown in the Heatmap tab glossary (instructor request: "can you
+# all define the terms on the heat map?").
+FEATURE_GLOSSARY: Dict[str, str] = {
+    "BubbleYes": "1 if the compound bubbled (yes), otherwise 0. This is the outcome the class cares about.",
+    "BubN": "Bubble response as a code: maybe = 0, yes = 1, no = 2.",
+    "PhaseN": "Phase result as a code: not made = 0, impure = 1, pure = 2.",
+    "AN": "How many of the main A-site element are in the formula (e.g. the 2 in La₂NiO₄).",
+    "APN": "How many of the second A-site element (A′) are in the formula. 0 when the A-site is a single element.",
+    "BN": "How many of the main B-site element are in the formula.",
+    "BPN": "How many of the second B-site element (B′) are in the formula.",
+    "BDPN": "How many of the third B-site element (B″) are in the formula.",
+    "ON": "How many oxygen atoms are in the formula.",
+    "A_avg_Z": "Average atomic number of the A-site, weighted by how much of each element is present.",
+    "B_avg_Z": "Average atomic number of the B-site, weighted by how much of each element is present.",
+    "A_avg_mass": "Average atomic mass of the A-site, weighted by the amounts of A and A′.",
+    "B_avg_mass": "Average atomic mass of the B-site, weighted by the amounts of B, B′, and B″.",
+    "FormulaMass": "Total mass of one formula unit — every element's atomic mass × its ratio, summed.",
+    "O_to_cation_ratio": "Oxygen amount divided by the total cation amount (A-site + B-site). Higher = more oxygen-rich.",
+    "B_to_A_ratio": "Total B-site amount divided by total A-site amount. 0.5 for La₂NiO₄ (1 B per 2 A).",
+    "Mixed_A_site": "1 if the A-site contains more than one element (A and A′), otherwise 0.",
+    "Mixed_B_site": "1 if the B-site contains more than one element (B′ or B″ present), otherwise 0.",
+    "A_mix_fraction": "Share of the A-site taken by the SECOND element A′. 0 = single element, 0.5 = a 50/50 mix. Captures *how much* mixing, not just whether it happened.",
+    "B_mix_fraction": "Share of the B-site taken by the extra elements (B′ + B″). 0 = single element, 0.5 = half the site.",
+    "A_B_Z_diff": "A-site average atomic number minus B-site average atomic number — how different the two sites are.",
+    "A_B_mass_diff": "A-site average mass minus B-site average mass.",
+    "Avg_cation_Z": "Average atomic number across BOTH cation sites together, weighted by amounts.",
+    "Avg_cation_mass": "Average atomic mass across both cation sites together, weighted by amounts.",
+    "Cation_count": "How many distinct cation elements the compound has (A + A′ + B + B′ + B″ that are filled in).",
+    "N_A_elements": "How many distinct elements are on the A-site (1 or 2).",
+    "N_B_elements": "How many distinct elements are on the B-site (1, 2, or 3).",
+    "A_avg_EN": "Average Pauling electronegativity of the A-site — how strongly its atoms pull electrons.",
+    "B_avg_EN": "Average Pauling electronegativity of the B-site.",
+    "EN_difference_B_minus_A": "B-site electronegativity minus A-site electronegativity — bigger = more ionic-character contrast between sites.",
+    "Tolerance_factor": "Goldschmidt tolerance factor t = (r_A + r_O) / (√2 (r_B + r_O)) from Shannon ionic radii. t ≈ 0.9–1.0 fits an ideal cubic perovskite; lower = distorted, higher = hexagonal tendencies. Radii assume typical oxidation states; missing radii are filled with the class median.",
+    "A_site_radius": "Ratio-weighted average Shannon ionic radius of the A-site (12-coordinate, Å).",
+    "B_site_radius": "Ratio-weighted average Shannon ionic radius of the B-site (6-coordinate, Å).",
+}
+
+
+def glossary_table(features: Sequence[str]) -> pd.DataFrame:
+    """Return a Term/Meaning table for the given internal feature names."""
+
+    rows = []
+    for name in features:
+        rows.append({
+            "Term": friendly_label(name),
+            "Meaning": FEATURE_GLOSSARY.get(name, "Numeric descriptor calculated from the split formula."),
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(show_spinner=False)
+def mixing_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize outcomes for single-element vs mixed-cation compounds.
+
+    Directly answers the instructor question "when A/A′ or B/B′ are present in
+    differing amounts, is that reflected anywhere?" — this table shows how many
+    compounds mix cations on each site, how mixed they are on average, and how
+    their bubble/purity rates compare with simple compounds.
+    """
+
+    needed = {"Mixed_A_site", "Mixed_B_site", "BubbleYes", "PhaseN"}
+    if df.empty or not needed.issubset(df.columns):
+        return pd.DataFrame()
+
+    d = df.copy()
+    a_mix = d["Mixed_A_site"].fillna(0).astype(int)
+    b_mix = d["Mixed_B_site"].fillna(0).astype(int)
+
+    def _bucket(a: int, b: int) -> str:
+        if a and b:
+            return "Mixed A & B sites"
+        if a:
+            return "Mixed A-site only"
+        if b:
+            return "Mixed B-site only"
+        return "Single-element sites"
+
+    d["MixCategory"] = [_bucket(a, b) for a, b in zip(a_mix, b_mix)]
+
+    def _pct(sub_df: pd.DataFrame, column: str) -> float:
+        """Mean of a 0-1 column as a percent, safe against missing/NaN."""
+        if column not in sub_df.columns:
+            return 0.0
+        mean = pd.to_numeric(sub_df[column], errors="coerce").mean()
+        return 0.0 if pd.isna(mean) else round(float(mean) * 100, 1)
+
+    rows = []
+    order = ["Single-element sites", "Mixed A-site only", "Mixed B-site only", "Mixed A & B sites"]
+    for category in order:
+        sub = d[d["MixCategory"] == category]
+        if sub.empty:
+            continue
+        rows.append({
+            "Compound type": category,
+            "Compounds": int(len(sub)),
+            "Bubble yes %": _pct(sub, "BubbleYes"),
+            "Pure %": round(float((pd.to_numeric(sub["PhaseN"], errors="coerce") == 2).mean()) * 100, 1),
+            "Avg A′ share of A-site %": _pct(sub, "A_mix_fraction"),
+            "Avg B′/B″ share of B-site %": _pct(sub, "B_mix_fraction"),
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_heatmap(corr: pd.DataFrame) -> go.Figure:
+    """
+    Interactive correlation heatmap.
+
+    Hover any cell to see the exact pair and correlation value; cells show the
+    number when the matrix is small enough to stay readable.
+    """
 
     n = len(corr.columns)
-    size = max(6.0, min(13.0, 0.7 * n + 2.5))
-    fig, ax = plt.subplots(figsize=(size, size * 0.82))
-    im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="RdBu_r")
+    labels_x = [friendly_label(c) for c in corr.columns]
+    labels_y = [friendly_label(c) for c in corr.index]
 
-    labels = [friendly_label(c) for c in corr.columns]
-    ax.set_xticks(range(n))
-    # Label angle fix (#6/#9): 40-degree right-anchored labels read cleanly.
-    ax.set_xticklabels(labels, rotation=40, ha="right", rotation_mode="anchor", fontsize=9)
-    ax.set_yticks(range(len(corr.index)))
-    ax.set_yticklabels([friendly_label(c) for c in corr.index], fontsize=9)
+    heat = go.Heatmap(
+        z=np.round(corr.values, 2),
+        x=labels_x,
+        y=labels_y,
+        zmin=-1, zmax=1,
+        colorscale="RdBu", reversescale=True,   # blue = -1, red = +1 (matches old map)
+        xgap=2, ygap=2,
+        colorbar={
+            "title": {"text": "Correlation", "font": {"color": CHART_MUTED}},
+            "tickfont": {"color": CHART_MUTED},
+            "thickness": 12, "outlinewidth": 0,
+        },
+        hovertemplate="<b>%{y} × %{x}</b><br>correlation = %{z:.2f}<extra></extra>",
+    )
+    fig = go.Figure(heat)
 
-    # Light gridlines between cells for a cleaner, modern look.
-    ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, len(corr.index), 1), minor=True)
-    ax.grid(which="minor", color="white", linewidth=1.5)
-    ax.tick_params(which="minor", length=0)
-
-    # Annotate cells only when the matrix is reasonably small.
     if n <= 16:
-        for i in range(corr.shape[0]):
-            for j in range(corr.shape[1]):
-                value = corr.iloc[i, j]
-                if not np.isnan(value):
-                    ax.text(
-                        j, i, f"{value:.2f}", ha="center", va="center",
-                        fontsize=7.5,
-                        color="white" if abs(value) > 0.55 else "#1d1d1f",
-                    )
+        fig.update_traces(
+            text=np.round(corr.values, 2), texttemplate="%{text:.2f}",
+            textfont={"size": 10},
+        )
 
-    ax.set_title("Relationship Map: how numeric features move together",
-                 fontsize=13, fontweight="bold", pad=12)
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation  (-1 to +1)")
-    fig.tight_layout()
-    return fig
+    fig.update_yaxes(autorange="reversed")
+    fig.update_xaxes(tickangle=-38)
+    height = max(440, min(820, 40 * n + 190))
+    return _apply_chart_theme(fig, height=height)
 
 
-def bubble_relationships(corr: pd.DataFrame) -> pd.DataFrame:
+def bubble_relationships(corr: pd.DataFrame, restrict_to: Optional[Sequence[str]] = None,
+                         top_n: int = 10) -> pd.DataFrame:
     """
     Extract the strongest relationships with bubble response.
 
-    This makes the heatmap easier for students who are not used to reading
-    correlation matrices.
+    Parameters
+    ----------
+    restrict_to:
+        When given, only these features are ranked. The Heatmap tab passes the
+        user's current map selection so the table and the map always agree
+        (instructor feedback: items appeared in this table but not on the map).
+        When None, every numeric feature is ranked.
+
+    Feature names are returned as the same friendly labels used on the heatmap.
     """
 
     target_col = "BubbleYes" if "BubbleYes" in corr.columns else "BubN" if "BubN" in corr.columns else None
     if target_col is None:
         return pd.DataFrame()
 
-    rel = corr[target_col].drop(labels=[target_col], errors="ignore").dropna()
+    rel = corr[target_col].drop(labels=[target_col, "BubN"], errors="ignore").dropna()
+    if restrict_to is not None:
+        keep = [f for f in restrict_to if f in rel.index and f != target_col]
+        rel = rel.loc[keep]
     if rel.empty:
         return pd.DataFrame()
 
     out = rel.reset_index()
     out.columns = ["Feature", "Correlation with bubble result"]
+    out["Feature"] = out["Feature"].map(friendly_label)
     out["Strength"] = out["Correlation with bubble result"].abs()
     out = out.sort_values("Strength", ascending=False).drop(columns=["Strength"])
-    return out.head(10)
+    return out.head(top_n)
+
+
+# =============================================================================
+# 9b. PERIODIC TABLE VIEW, EXTRA CHARTS, NEIGHBORS, MERGE + REPORT HELPERS
+# =============================================================================
+
+def _build_periodic_positions() -> Dict[str, Tuple[int, int]]:
+    """(row, column) grid position for every element, La/Ac series offset below."""
+
+    positions: Dict[str, Tuple[int, int]] = {}
+
+    def place(row: int, start_col: int, symbols: str) -> None:
+        for offset, sym in enumerate(symbols.split()):
+            positions[sym] = (row, start_col + offset)
+
+    place(1, 1, "H"); positions["He"] = (1, 18)
+    place(2, 1, "Li Be"); place(2, 13, "B C N O F Ne")
+    place(3, 1, "Na Mg"); place(3, 13, "Al Si P S Cl Ar")
+    place(4, 1, "K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr")
+    place(5, 1, "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe")
+    place(6, 1, "Cs Ba La"); place(6, 4, "Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn")
+    place(7, 1, "Fr Ra Ac"); place(7, 4, "Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og")
+    place(9, 4, "Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu")   # lanthanides
+    place(10, 4, "Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr")    # actinides
+    return positions
+
+
+PERIODIC_POSITIONS = _build_periodic_positions()
+
+
+@st.cache_data(show_spinner=False)
+def element_outcome_summary(df: pd.DataFrame, scope: str = "any") -> pd.DataFrame:
+    """
+    Per-element outcome stats for the periodic-table view.
+
+    scope: "A" (A/A′ columns), "B" (B/B′/B″ columns), or "any" (all five).
+    Each compound row counts once per element even if the element fills two slots.
+    Returns columns: Symbol, Compounds, BubbleYesPct, PurePct.
+    """
+
+    scope_cols = {"A": ["A", "AP"], "B": ["B", "BP", "BDP"],
+                  "any": ["A", "AP", "B", "BP", "BDP"]}.get(scope, ["A", "AP", "B", "BP", "BDP"])
+    cols = [c for c in scope_cols if c in df.columns]
+    if df.empty or not cols:
+        return pd.DataFrame(columns=["Symbol", "Compounds", "BubbleYesPct", "PurePct"])
+
+    work = df.reset_index(drop=True).copy()
+    work["_row_id"] = work.index
+    melted = work.melt(id_vars=["_row_id", "BubbleYes", "PhaseN"], value_vars=cols,
+                       value_name="Symbol")
+    melted["Symbol"] = melted["Symbol"].astype(str).str.strip()
+    melted = melted[melted["Symbol"] != ""]
+    melted = melted.drop_duplicates(subset=["_row_id", "Symbol"])
+    if melted.empty:
+        return pd.DataFrame(columns=["Symbol", "Compounds", "BubbleYesPct", "PurePct"])
+
+    grouped = melted.groupby("Symbol").agg(
+        Compounds=("_row_id", "count"),
+        BubbleYesPct=("BubbleYes", lambda s: float(pd.to_numeric(s, errors="coerce").mean()) * 100),
+        PurePct=("PhaseN", lambda s: float((pd.to_numeric(s, errors="coerce") == 2).mean()) * 100),
+    ).reset_index()
+    return grouped.round(1)
+
+
+def plot_periodic_heat(summary: pd.DataFrame, value_col: str = "BubbleYesPct") -> go.Figure:
+    """
+    Periodic table colored by an outcome rate (default: bubble-yes %).
+
+    Elements the class used are colored red → amber → green; unused elements are
+    dim gray. Hover a colored tile for its counts and rates.
+    """
+
+    n_rows, n_cols = 10, 18
+    z = [[None] * n_cols for _ in range(n_rows)]
+    text = [[""] * n_cols for _ in range(n_rows)]
+    custom = [[[0, 0.0, 0.0]] * n_cols for _ in range(n_rows)]
+
+    stats = {row["Symbol"]: row for _, row in summary.iterrows()}
+    unused_x, unused_y, unused_text = [], [], []
+
+    for sym, (row, col) in PERIODIC_POSITIONS.items():
+        r, c = row - 1, col - 1
+        if sym in stats:
+            s = stats[sym]
+            z[r][c] = float(s[value_col])
+            text[r][c] = sym
+            custom[r][c] = [int(s["Compounds"]), float(s["BubbleYesPct"]), float(s["PurePct"])]
+        else:
+            unused_x.append(col)
+            unused_y.append(row)
+            unused_text.append(sym)
+
+    value_title = "% bubbled" if value_col == "BubbleYesPct" else "% pure"
+    fig = go.Figure(go.Heatmap(
+        z=z, text=text, customdata=custom,
+        x=list(range(1, n_cols + 1)), y=list(range(1, n_rows + 1)),
+        zmin=0, zmax=100,
+        colorscale=[[0.0, "#f87171"], [0.5, "#fbbf24"], [1.0, "#34d399"]],
+        xgap=3, ygap=3, hoverongaps=False,
+        texttemplate="%{text}", textfont={"size": 11, "color": "#0b1120"},
+        colorbar={"title": {"text": value_title, "font": {"color": CHART_MUTED}},
+                  "tickfont": {"color": CHART_MUTED}, "thickness": 12, "outlinewidth": 0},
+        hovertemplate="<b>%{text}</b><br>%{customdata[0]} compounds"
+                      "<br>bubble yes: %{customdata[1]:.0f}%"
+                      "<br>pure: %{customdata[2]:.0f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=unused_x, y=unused_y, mode="text", text=unused_text,
+        textfont={"size": 10, "color": "#3d4a63"}, hoverinfo="skip", showlegend=False,
+    ))
+    fig.update_xaxes(visible=False, range=[0.4, n_cols + 0.6])
+    fig.update_yaxes(visible=False, range=[n_rows + 0.6, 0.4])
+    return _apply_chart_theme(fig, height=430)
+
+
+def plot_confusion(confusion: Dict[str, int]) -> go.Figure:
+    """2×2 confusion-matrix heatmap for the bubble model's held-out test set."""
+
+    z = [[confusion["tn"], confusion["fp"]], [confusion["fn"], confusion["tp"]]]
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=["Predicted no", "Predicted yes"],
+        y=["Actual no", "Actual yes"],
+        colorscale=[[0.0, CHART_BAR_LOW], [1.0, CHART_ACCENT]],
+        xgap=3, ygap=3, showscale=False,
+        texttemplate="%{z}", textfont={"size": 16},
+        hovertemplate="%{y} · %{x}: <b>%{z}</b><extra></extra>",
+    ))
+    fig.update_yaxes(autorange="reversed")
+    return _apply_chart_theme(fig, height=280)
+
+
+def plot_what_if(sweep: pd.DataFrame, x_label: str, current_value: float) -> go.Figure:
+    """
+    Line chart of predicted probabilities as ONE input is swept.
+
+    Expects columns: value, bubble_prob, and optionally purity_prob.
+    """
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=sweep["value"], y=sweep["bubble_prob"], mode="lines+markers",
+        name="Bubble probability", line={"color": CHART_ACCENT, "width": 3},
+        marker={"size": 6},
+        hovertemplate=x_label + " = %{x:g}<br>bubble: <b>%{y:.0%}</b><extra></extra>",
+    ))
+    if "purity_prob" in sweep.columns:
+        fig.add_trace(go.Scatter(
+            x=sweep["value"], y=sweep["purity_prob"], mode="lines+markers",
+            name="Purity probability", line={"color": "#34d399", "width": 3, "dash": "dot"},
+            marker={"size": 6},
+            hovertemplate=x_label + " = %{x:g}<br>pure: <b>%{y:.0%}</b><extra></extra>",
+        ))
+    fig.add_vline(x=current_value, line_dash="dash", line_color="#94a3b8",
+                  annotation_text="current", annotation_font_color="#94a3b8")
+    fig.update_xaxes(title_text=x_label, title_font={"color": CHART_MUTED})
+    fig.update_yaxes(range=[-0.02, 1.02], tickformat=".0%")
+    fig.update_layout(legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0})
+    fig = _apply_chart_theme(fig, height=380)
+    fig.update_layout(margin={"t": 56})   # headroom so the legend never overlaps
+    return fig
+
+
+def nearest_neighbors(df: pd.DataFrame, pred_row: pd.DataFrame, k: int = 5) -> pd.DataFrame:
+    """
+    The k most compositionally similar past experiments to a proposed compound.
+
+    Similarity = Euclidean distance in standardized descriptor space (composition
+    only — phase is excluded; mass included since this is physical similarity,
+    not model input). Returns Formula, Semester, Bubble, Phase, Distance.
+    """
+
+    feats, _ = feature_columns(use_phase=False, use_mass=True)
+    feats = [c for c in feats if c in df.columns and c in pred_row.columns]
+    if df.empty or not feats:
+        return pd.DataFrame()
+
+    base = df[feats].apply(pd.to_numeric, errors="coerce")
+    means = base.mean()
+    stds = base.std(ddof=0).replace({0: 1.0}).fillna(1.0)
+    base_z = (base.fillna(means) - means) / stds
+
+    target = pd.to_numeric(pred_row.iloc[0][feats], errors="coerce")
+    target_z = (target.fillna(means) - means) / stds
+
+    dist = np.sqrt(((base_z - target_z) ** 2).sum(axis=1))
+    nearest = dist.nsmallest(int(k))
+
+    out = pd.DataFrame({
+        "Formula": df.loc[nearest.index, "Formula"] if "Formula" in df.columns else "",
+        "Semester": df.loc[nearest.index, "Semester"] if "Semester" in df.columns else "",
+        "Bubble": df.loc[nearest.index, "BubbleLabel"] if "BubbleLabel" in df.columns else "",
+        "Phase": df.loc[nearest.index, "PhaseLabel"] if "PhaseLabel" in df.columns else "",
+        "Distance": nearest.round(2),
+    })
+    return out.reset_index(drop=True)
+
+
+def find_merge_duplicates(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rows in `new` that already appear in `existing` (New Semester merge check).
+
+    Two rows match when group, semester, slot, composition, and outcomes are all
+    identical after trimming/lowercasing. Returns the duplicate rows from `new`.
+    """
+
+    key_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "B", "BN",
+                            "ON", "P", "Bub"] if c in existing.columns and c in new.columns]
+    if existing.empty or new.empty or len(key_cols) < 4:
+        return pd.DataFrame()
+
+    def _keys(frame: pd.DataFrame) -> pd.Series:
+        parts = [frame[c].astype(str).str.strip().str.lower() for c in key_cols]
+        out = parts[0]
+        for p in parts[1:]:
+            out = out + "|" + p
+        return out
+
+    existing_keys = set(_keys(existing))
+    new_keys = _keys(new)
+    return new[new_keys.isin(existing_keys)].copy()
+
+
+def _report_table(df: Optional[pd.DataFrame], max_rows: int = 12) -> str:
+    """Render a DataFrame as report HTML (or a placeholder note)."""
+
+    if df is None or df.empty:
+        return "<p class='note'>Not available for this dataset.</p>"
+    return df.head(max_rows).to_html(index=False, border=0, classes="tbl", justify="left")
+
+
+def build_html_report(stats: Dict[str, object],
+                      bubble_counts: Optional[pd.DataFrame],
+                      phase_counts: Optional[pd.DataFrame],
+                      links: Optional[pd.DataFrame],
+                      mix: Optional[pd.DataFrame],
+                      a_summary: Optional[pd.DataFrame],
+                      b_summary: Optional[pd.DataFrame],
+                      ml: Optional[dict],
+                      purity: Optional[dict]) -> bytes:
+    """
+    Build a self-contained, print-friendly HTML lab report (no personal info —
+    aggregates only). Open in a browser and print to PDF if needed.
+    """
+
+    def _pct(x: object) -> str:
+        try:
+            return f"{float(x):.0%}"
+        except (TypeError, ValueError):
+            return "—"
+
+    ml_html = "<p class='note'>Bubble model not available.</p>"
+    if ml and ml.get("ok"):
+        cv_line = (f"<li>Cross-validated accuracy ({ml['cv_folds']}-fold): "
+                   f"<b>{_pct(ml['cv_mean'])} ± {ml['cv_std']:.02f}</b></li>"
+                   if ml.get("cv_mean") is not None else "")
+        cm = ml.get("confusion", {})
+        ml_html = f"""
+        <ul>
+          <li>Test accuracy: <b>{_pct(ml['rf_accuracy'])}</b> (always-guess baseline {_pct(ml['baseline_accuracy'])})</li>
+          {cv_line}
+          <li>Precision {_pct(ml['rf_precision'])} · Recall {_pct(ml['rf_recall'])} · F1 {_pct(ml['rf_f1'])}</li>
+          <li>Confusion (test set): TP {cm.get('tp', '—')} · TN {cm.get('tn', '—')} ·
+              FP {cm.get('fp', '—')} · FN {cm.get('fn', '—')}</li>
+        </ul>
+        <h3>Top model features</h3>
+        {_report_table(ml.get('importance').assign(Feature=ml.get('importance')['Feature'].map(friendly_label)).round(3) if ml.get('importance') is not None else None)}
+        """
+
+    purity_html = "<p class='note'>Purity model not available.</p>"
+    if purity and purity.get("ok"):
+        cv_line = (f"<li>Cross-validated accuracy ({purity['cv_folds']}-fold): "
+                   f"<b>{_pct(purity['cv_mean'])} ± {purity['cv_std']:.02f}</b></li>"
+                   if purity.get("cv_mean") is not None else "")
+        purity_html = f"""
+        <ul>
+          <li>Test accuracy: <b>{_pct(purity['accuracy'])}</b> (baseline {_pct(purity['baseline_accuracy'])})</li>
+          {cv_line}
+          <li>Precision (pure): {_pct(purity['precision'])}</li>
+        </ul>"""
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>General Chemistry II — Class Data Report</title>
+<style>
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #1a2233; margin: 2.2rem auto; max-width: 880px; line-height: 1.5; }}
+  h1 {{ font-size: 1.7rem; margin-bottom: 0.2rem; }}
+  h2 {{ font-size: 1.15rem; border-bottom: 2px solid #dbe4f3; padding-bottom: 0.25rem; margin-top: 2rem; }}
+  h3 {{ font-size: 1rem; margin-bottom: 0.3rem; }}
+  .sub {{ color: #5b6b85; margin-top: 0; }}
+  .stats {{ display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 1rem 0; }}
+  .stat b {{ font-size: 1.4rem; display: block; }}
+  .stat span {{ color: #5b6b85; font-size: 0.85rem; }}
+  table.tbl {{ border-collapse: collapse; width: 100%; font-size: 0.88rem; margin: 0.4rem 0 1rem; }}
+  table.tbl th {{ text-align: left; background: #eef3fb; padding: 0.4rem 0.6rem; }}
+  table.tbl td {{ padding: 0.35rem 0.6rem; border-bottom: 1px solid #e4eaf5; }}
+  .note {{ color: #5b6b85; font-style: italic; }}
+  .disclaimer {{ margin-top: 2rem; padding: 0.8rem 1rem; background: #f5f8fd; border-left: 4px solid #7aa7e0; font-size: 0.85rem; color: #44526b; }}
+</style></head><body>
+<h1>General Chemistry II Catalyst Insight Studio — Class Data Report</h1>
+<p class="sub">Generated {stats.get('generated', '')} · aggregates only, no student-identifying information</p>
+
+<div class="stats">
+  <div class="stat"><b>{stats.get('n_compounds', 0):,}</b><span>compounds</span></div>
+  <div class="stat"><b>{stats.get('n_semesters', 0)}</b><span>semesters</span></div>
+  <div class="stat"><b>{stats.get('bubble_rate', '—')}</b><span>bubbled (yes)</span></div>
+  <div class="stat"><b>{stats.get('pure_rate', '—')}</b><span>came out pure</span></div>
+  <div class="stat"><b>{stats.get('n_issues', 0)}</b><span>open data issues</span></div>
+</div>
+
+<h2>Response counts</h2>
+<h3>Bubble response</h3>{_report_table(bubble_counts)}
+<h3>Phase result</h3>{_report_table(phase_counts)}
+
+<h2>Strongest links to bubbling (all features)</h2>{_report_table(links)}
+
+<h2>Cation mixing (A/A′ and B/B′)</h2>{_report_table(mix)}
+
+<h2>Element summaries</h2>
+<h3>A-site elements (top by bubble-yes rate)</h3>{_report_table(a_summary)}
+<h3>B-site elements (top by bubble-yes rate)</h3>{_report_table(b_summary)}
+
+<h2>Bubble model</h2>{ml_html}
+<h2>Purity model</h2>{purity_html}
+
+<div class="disclaimer">These are descriptive statistics and hypothesis-generating models built from
+student lab data. Correlation is not causation, and model predictions are not guarantees. Mass
+descriptors: {stats.get('mass_note', 'per current sidebar setting')}.</div>
+</body></html>"""
+    return html.encode("utf-8")
 
 
 # =============================================================================
@@ -1878,6 +2435,10 @@ def feature_columns(use_phase: bool = True, use_mass: bool = True) -> Tuple[List
         "A_B_Z_diff", "Avg_cation_Z", "Cation_count", "N_B_elements",
         # Mixing fractions (#1): degree of A/A' and B/B' mixing.
         "A_mix_fraction", "B_mix_fraction",
+        # Physics descriptors (July 2026): tolerance factor + electronegativity.
+        # build_feature_matrix() drops any of these that aren't in the data.
+        "Tolerance_factor", "A_site_radius", "B_site_radius",
+        "A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A",
     ]
 
     # Mass-based features are optional (#4). Atomic mass and atomic number are
@@ -1993,6 +2554,25 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, use_mass: bool = Tr
     rf_recall = recall_score(y_test, rf_preds, zero_division=0)
     rf_f1 = f1_score(y_test, rf_preds, zero_division=0)
 
+    # Test-set confusion matrix: how the held-out predictions actually landed.
+    cm = confusion_matrix(y_test, rf_preds, labels=[0, 1])
+    confusion = {"tn": int(cm[0][0]), "fp": int(cm[0][1]),
+                 "fn": int(cm[1][0]), "tp": int(cm[1][1])}
+
+    # Stratified k-fold cross-validation: a more honest accuracy estimate than a
+    # single split on a small dataset. Skipped when a class is too rare to fold.
+    cv_mean = cv_std = None
+    cv_folds = 5 if (y.value_counts().min() >= 5 and len(y) >= 50) else \
+               3 if y.value_counts().min() >= 3 else 0
+    if cv_folds:
+        cv_model = RandomForestClassifier(
+            n_estimators=150, max_depth=7, min_samples_leaf=2,
+            random_state=random_state, n_jobs=-1, class_weight="balanced_subsample",
+        )
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+        scores = cross_val_score(cv_model, X, y, cv=skf, scoring="accuracy")
+        cv_mean, cv_std = float(scores.mean()), float(scores.std())
+
     importance = pd.DataFrame(
         {"Feature": X.columns, "Importance": rf.feature_importances_}
     ).sort_values("Importance", ascending=False)
@@ -2056,6 +2636,10 @@ def train_ml_model(df: pd.DataFrame, use_phase: bool = True, use_mass: bool = Tr
         "testing_rows": len(X_test),
         "importance": importance,
         "overfit_warning": overfit_warning,
+        "confusion": confusion,
+        "cv_mean": cv_mean,
+        "cv_std": cv_std,
+        "cv_folds": cv_folds,
     }
 
 
@@ -2105,6 +2689,18 @@ def train_purity_model(df: pd.DataFrame, use_mass: bool = True, random_state: in
     precision = precision_score(y_test, preds, zero_division=0)
     recall = recall_score(y_test, preds, zero_division=0)
 
+    cv_mean = cv_std = None
+    cv_folds = 5 if (y.value_counts().min() >= 5 and len(y) >= 50) else \
+               3 if y.value_counts().min() >= 3 else 0
+    if cv_folds:
+        cv_model = RandomForestClassifier(
+            n_estimators=150, max_depth=7, min_samples_leaf=2,
+            random_state=random_state, n_jobs=-1, class_weight="balanced_subsample",
+        )
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+        scores = cross_val_score(cv_model, X, y, cv=skf, scoring="accuracy")
+        cv_mean, cv_std = float(scores.mean()), float(scores.std())
+
     importance = pd.DataFrame(
         {"Feature": X.columns, "Importance": rf.feature_importances_}
     ).sort_values("Importance", ascending=False)
@@ -2137,6 +2733,9 @@ def train_purity_model(df: pd.DataFrame, use_mass: bool = True, random_state: in
         "pure_rate": float(pure_rate),
         "importance": importance,
         "overfit_warning": overfit_warning,
+        "cv_mean": cv_mean,
+        "cv_std": cv_std,
+        "cv_folds": cv_folds,
     }
 
 
@@ -2155,6 +2754,7 @@ def make_single_prediction_row(
     bdp: str,
     bdpn: float,
     on: float,
+    radii_table: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Create one cleaned/described row from ML Lab form input."""
 
@@ -2185,7 +2785,7 @@ def make_single_prediction_row(
         ]
     )
     clean = clean_and_encode_data(raw, atomic)
-    described = add_chemical_descriptors(clean, atomic, en_table)
+    described = add_chemical_descriptors(clean, atomic, en_table, radii_table)
     return described
 
 
@@ -2202,6 +2802,8 @@ PCA_FEATURE_COLUMNS = [
     "FormulaMass", "O_to_cation_ratio", "B_to_A_ratio",
     "A_B_Z_diff", "A_B_mass_diff", "Avg_cation_Z", "Avg_cation_mass",
     "Cation_count", "N_B_elements", "A_mix_fraction", "B_mix_fraction",
+    "Tolerance_factor", "A_site_radius", "B_site_radius",
+    "A_avg_EN", "B_avg_EN", "EN_difference_B_minus_A",
 ]
 
 
@@ -2260,34 +2862,51 @@ def compute_pca(df: pd.DataFrame, n_clusters: int = 0, random_state: int = 42) -
     }
 
 
-def plot_pca_scatter(coords: pd.DataFrame, color_by: str = "Bubble"):
-    """Return a 2-D PCA scatter, points colored by the chosen column."""
+def plot_pca_scatter(coords: pd.DataFrame, color_by: str = "Bubble") -> go.Figure:
+    """
+    Interactive 2-D PCA scatter, points colored by the chosen column.
 
-    fig, ax = plt.subplots(figsize=(7.5, 6))
+    Hovering a point shows its formula and outcome — this is the fastest way for
+    students to ask "what IS that odd point over there?".
+    """
+
+    fig = go.Figure()
 
     if color_by not in coords.columns:
         color_by = None
 
     if color_by is None:
-        ax.scatter(coords["PC1"], coords["PC2"], s=28, alpha=0.7, color="#0071e3")
+        fig.add_trace(go.Scattergl(
+            x=coords["PC1"], y=coords["PC2"], mode="markers",
+            marker={"size": 9, "color": CHART_ACCENT, "opacity": 0.8},
+            customdata=coords[["Formula"]].astype(str).values,
+            hovertemplate="<b>%{customdata[0]}</b><br>PC1 %{x:.2f} · PC2 %{y:.2f}<extra></extra>",
+        ))
     else:
         groups = coords[color_by].astype(str).replace("", "Missing").fillna("Missing")
-        palette = ["#0071e3", "#ff9f0a", "#30d158", "#ff453a", "#5e5ce6",
-                   "#64d2ff", "#bf5af2", "#ffd60a", "#8e8e93", "#ac8e68"]
         for i, label in enumerate(sorted(groups.unique())):
             sub = coords[groups == label]
-            ax.scatter(sub["PC1"], sub["PC2"], s=28, alpha=0.75,
-                       color=palette[i % len(palette)], label=str(label))
-        ax.legend(title=color_by, fontsize=8, title_fontsize=9, loc="best", framealpha=0.9)
+            color = OUTCOME_COLORS.get(label, CHART_PALETTE[i % len(CHART_PALETTE)])
+            hover_extra = f"{color_by}: {label}"
+            fig.add_trace(go.Scattergl(
+                x=sub["PC1"], y=sub["PC2"], mode="markers", name=str(label),
+                marker={
+                    "size": 9, "color": color, "opacity": 0.85,
+                    "line": {"width": 1, "color": "rgba(10,15,28,0.9)"},
+                },
+                customdata=sub[["Formula"]].astype(str).values,
+                hovertemplate="<b>%{customdata[0]}</b><br>PC1 %{x:.2f} · PC2 %{y:.2f}"
+                              f"<extra>{hover_extra}</extra>",
+            ))
+        fig.update_layout(legend={
+            "title": {"text": color_by, "font": {"color": CHART_MUTED}},
+            "orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0,
+        })
 
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
-    ax.set_title("PCA map — nearby compounds have similar composition",
-                 fontsize=13, fontweight="bold")
-    ax.grid(alpha=0.2)
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
-    fig.tight_layout()
+    fig.update_xaxes(title_text="PC1", title_font={"color": CHART_MUTED})
+    fig.update_yaxes(title_text="PC2", title_font={"color": CHART_MUTED})
+    fig = _apply_chart_theme(fig, height=520)
+    fig.update_layout(margin={"t": 56})   # headroom so the legend never overlaps
     return fig
 
 

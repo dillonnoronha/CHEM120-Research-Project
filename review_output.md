@@ -1,4 +1,4 @@
-# Code Review: CHEM 120 Catalyst Insight Studio
+# Code Review: General Chemistry II Catalyst Insight Studio
 
 ## Summary
 This review examined `app.py` (918 lines) and `pipeline.py` (1551 lines) for dead code, unused imports, overly long functions, and non-modular ML pipeline steps.
@@ -63,7 +63,7 @@ These are all helper functions with legitimate internal use and are appropriatel
   - Extract overfitting warnings into `_check_overfitting()` (lines 1454–1467)
 
 ### 3.4 **pipeline.py: `validate_compound_rows()` — 81 lines (lines 865–945)**
-- **Purpose:** Check cleaned rows against CHEM 120 data-entry rules
+- **Purpose:** Check cleaned rows against General Chemistry II data-entry rules
 - **Complexity:** 15 conditions, 9 assignments
 - **Refactoring opportunity:**
   - Extract individual validation checks into separate functions:
