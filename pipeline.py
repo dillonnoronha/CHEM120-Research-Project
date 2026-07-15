@@ -1,5 +1,5 @@
 """
-CHEM 120 Catalyst Insight Studio — Data Pipeline
+General Chemistry II Catalyst Insight Studio — Data Pipeline
 =================================================
 
 All data loading, cleaning, validation, descriptor calculation, plotting helpers,
@@ -70,12 +70,12 @@ DATA_DIR = ROOT_DIR / "data"
 # "slot" such as 1A, 1AN, 2A, 2AN, etc.
 COMPOUND_SLOTS = [1, 2, 3, 4]
 
-# CHEM 120 project label conversions.
+# General Chemistry II project label conversions.
 # Keeping these dictionaries near the top makes the app easy to adapt if the
 # class changes its coding scheme later.
 # Phase is normalized before encoding so older survey wording such as
 # "pure phase/homogenous mixture" does not create messy graph labels.
-# CHEM 120 officially uses impure -> 1 and pure -> 2; not made -> 0 is
+# General Chemistry II officially uses impure -> 1 and pure -> 2; not made -> 0 is
 # included to handle older/raw survey exports safely.
 PHASE_MAP = {"not made": 0, "impure": 1, "pure": 2}
 BUBBLE_MAP = {"maybe": 0, "yes": 1, "no": 2}
@@ -208,7 +208,7 @@ def normalize_phase_label(value: object) -> str:
     Convert raw phase wording into a small set of clean categories.
 
     Why this exists:
-    Older CHEM 120 spreadsheets sometimes use long phase descriptions such as
+    Older General Chemistry II spreadsheets sometimes use long phase descriptions such as
     "pure phase/homogenous mixture" or "did not make compound X/it melted to the
     crucible". If those raw strings are plotted directly, the Phase Counts graph
     becomes unreadable. This helper maps those long answers to clear labels.
@@ -1186,7 +1186,7 @@ def clean_and_encode_data(long_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.Dat
 @st.cache_data(show_spinner=False)
 def validate_compound_rows(clean_df: pd.DataFrame, atomic: pd.DataFrame) -> pd.DataFrame:
     """
-    Check cleaned rows against the CHEM 120 data-entry rules.
+    Check cleaned rows against the General Chemistry II data-entry rules.
 
     Future update point:
     Add new validation checks inside this function if the lab template changes.

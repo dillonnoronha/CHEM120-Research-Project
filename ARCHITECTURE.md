@@ -1,4 +1,4 @@
-# CHEM 120 Catalyst Insight Studio — Architecture
+# General Chemistry II Catalyst Insight Studio — Architecture
 
 ## Overview
 

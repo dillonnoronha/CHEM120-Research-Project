@@ -1,7 +1,7 @@
 @echo off
-title CHEM 120 Catalyst Insight Studio
+title General Chemistry II Catalyst Insight Studio
 echo.
-echo Starting CHEM 120 Catalyst Insight Studio...
+echo Starting General Chemistry II Catalyst Insight Studio...
 echo.
 py -m pip install -r requirements.txt
 echo.
