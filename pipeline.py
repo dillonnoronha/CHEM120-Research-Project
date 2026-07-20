@@ -2303,6 +2303,38 @@ def find_merge_duplicates(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataF
     return new[new_keys.isin(existing_keys)].copy()
 
 
+def combine_long_tables(frames: Sequence[pd.DataFrame],
+                        drop_exact_duplicates: bool = True) -> Tuple[pd.DataFrame, int]:
+    """
+    Concatenate several long-format tables (instructor Combine tab).
+
+    Each student can download their own data from the app; this stitches those
+    files back into ONE master table. When drop_exact_duplicates is True, rows
+    that match on group, semester, slot, composition, and outcomes (after
+    trimming/lowercasing) are kept once — so uploading overlapping files is safe.
+
+    Returns (combined_df, n_duplicates_removed).
+    """
+
+    frames = [f for f in frames if f is not None and not f.empty]
+    if not frames:
+        return pd.DataFrame(), 0
+
+    merged = pd.concat(frames, ignore_index=True)
+    if not drop_exact_duplicates:
+        return merged, 0
+
+    key_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "AP", "APN",
+                            "B", "BN", "BP", "BPN", "BDP", "BDPN", "ON", "P", "Bub"]
+                if c in merged.columns]
+    if len(key_cols) < 4:
+        return merged, 0
+
+    normalized = merged[key_cols].astype(str).apply(lambda s: s.str.strip().str.lower())
+    keep = ~normalized.duplicated(keep="first")
+    return merged[keep].reset_index(drop=True), int((~keep).sum())
+
+
 def _report_table(df: Optional[pd.DataFrame], max_rows: int = 12) -> str:
     """Render a DataFrame as report HTML (or a placeholder note)."""
 

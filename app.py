@@ -50,6 +50,7 @@ from pipeline import (
     build_feature_matrix,
     build_html_report,
     clean_and_encode_data,
+    combine_long_tables,
     compute_pca,
     dataframe_to_csv_bytes,
     dataframe_to_excel_bytes,
@@ -1494,6 +1495,95 @@ def render_new_semester_tab(long_df: pd.DataFrame) -> None:
     st.caption("Replace data/Combined_Data.xlsx with this file to load the merged dataset next startup.")
 
 
+def render_combine_tab(long_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd.DataFrame,
+                       radii: pd.DataFrame) -> None:
+    """Instructor-only tab — merge many student downloads into one master file."""
+
+    st.caption("🔓 Instructor-only. Each student downloads their own data from this app; "
+               "drop all of those files here and get back ONE cleaned, de-duplicated master file.")
+
+    files = st.file_uploader(
+        "Student data files (CSV or Excel — add as many as you like)",
+        type=["csv", "xlsx", "xlsm", "xls"], accept_multiple_files=True,
+        key="combine_uploads",
+    )
+    if not files:
+        st.info("Upload two or more student files to combine them. Raw survey exports and "
+                "files downloaded from this app both work.")
+        return
+
+    opt_cols = st.columns(2)
+    with opt_cols[0]:
+        include_current = st.checkbox(
+            "Also include the currently loaded dataset", value=True,
+            help="Adds the data the app has open right now to the combined file.")
+    with opt_cols[1]:
+        drop_dupes = st.checkbox(
+            "Remove exact duplicate rows", value=True,
+            help="Rows matching on group, semester, composition, and outcomes are kept once, "
+                 "so overlapping uploads are safe.")
+
+    frames, report_rows = [], []
+    for f in files:
+        try:
+            raw = read_table_from_bytes(f.getvalue(), f.name)
+            f_long, f_warnings = normalize_to_long_format(raw)
+            frames.append(f_long)
+            report_rows.append({"File": f.name, "Compound rows": len(f_long),
+                                "Notes": f"{len(f_warnings)} column warning(s)" if f_warnings else "OK"})
+        except Exception as exc:
+            report_rows.append({"File": f.name, "Compound rows": 0, "Notes": f"❌ could not read: {exc}"})
+    st.dataframe(pd.DataFrame(report_rows), use_container_width=True, hide_index=True)
+
+    frames = [fr for fr in frames if not fr.empty]
+    n_sources = len(frames)
+    if include_current and not long_df.empty:
+        frames.insert(0, long_df)
+        n_sources += 1
+    if not frames:
+        st.error("No compound rows could be read from these files. Check the column names (1A, 1AN, …).")
+        return
+
+    combined, n_dupes = combine_long_tables(frames, drop_exact_duplicates=drop_dupes)
+
+    # Run the combined table through the full cleaning pipeline.
+    clean = clean_and_encode_data(combined, atomic)
+    described = add_chemical_descriptors(clean, atomic, en_table, radii)
+    described, _removed_log = remove_invalid_element_rows(described, atomic)
+    issues = validate_compound_rows(described, atomic)
+
+    m = st.columns(4)
+    m[0].metric("Sources combined", f"{n_sources:,}")
+    m[1].metric("Compound rows", f"{len(combined):,}")
+    m[2].metric("Duplicates removed", f"{n_dupes:,}")
+    m[3].metric("Validation issues", f"{len(issues):,}")
+
+    st.markdown("#### Preview — first 15 combined rows")
+    st.dataframe(described[ordered_columns(described)].head(15), use_container_width=True)
+
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.download_button("⬇️ Combined_Data.xlsx (master)",
+                           dataframe_to_excel_bytes(combined, "Combined_Data"),
+                           file_name="Combined_Data.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary",
+                           help="Drop-in replacement for data/Combined_Data.xlsx — what the app auto-loads on startup.")
+    with d2:
+        st.download_button("Cleaned combined data (CSV)",
+                           dataframe_to_csv_bytes(described[ordered_columns(described)]),
+                           file_name="general_chemistry_ii_combined_cleaned.csv", mime="text/csv")
+    with d3:
+        st.download_button("Cleaned combined data (Excel)",
+                           dataframe_to_excel_bytes(described[ordered_columns(described)], "Cleaned_Combined"),
+                           file_name="general_chemistry_ii_combined_cleaned.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.caption("To make this permanent, replace `data/Combined_Data.xlsx` in the GitHub repository "
+               "with the master download — the live app then loads it for everyone "
+               "(INSTRUCTOR_HANDOFF.md, section 4).")
+
+
 def render_landing() -> None:
     """Shown before any data is loaded: hero + how-to cards."""
 
@@ -1606,8 +1696,6 @@ def main() -> None:
                     st.rerun()
                 else:
                     st.error("Wrong passcode.")
-            st.caption("Reveals emails/names in-app for the teaching team. "
-                       "The passcode is set in pipeline.py (INSTRUCTOR_PASSCODE).")
 
     # ----- Reference tables (atomic mass, electronegativity, ionic radii) -----
     try:
@@ -1697,11 +1785,13 @@ def main() -> None:
                               "kpi-ok" if len(student_issues) == 0 else "kpi-warn", 0.18), unsafe_allow_html=True)
 
     # ----- Everything lives in tabs (no long scroll) -----
+    tab_labels = ["✅ Check", "📊 Explore", "🌡️ Heatmap", "🧭 Structure",
+                  "🔮 Predict", "➕ Add", "⬇️ Export", "📥 New Semester"]
+    if instructor_mode_on():
+        tab_labels.append("🗂️ Combine")   # instructor-only: merge student downloads
+    all_tabs = st.tabs(tab_labels)
     (tab_check, tab_explore, tab_heatmap, tab_structure, tab_ml,
-     tab_add, tab_export, tab_semester) = st.tabs(
-        ["✅ Check", "📊 Explore", "🌡️ Heatmap", "🧭 Structure",
-         "🔮 Predict", "➕ Add", "⬇️ Export", "📥 New Semester"]
-    )
+     tab_add, tab_export, tab_semester) = all_tabs[:8]
     with tab_check:
         render_check_tab(described_df, issues_df, outlier_df, cleaning_log,
                          fix_proposals, corrections_log, valid_element_symbols(atomic))
@@ -1719,6 +1809,9 @@ def main() -> None:
         render_export_tab(described_df, issues_df, outlier_df, use_phase_in_ml, use_mass_in_ml)
     with tab_semester:
         render_new_semester_tab(long_df)
+    if instructor_mode_on():
+        with all_tabs[8]:
+            render_combine_tab(long_df, atomic, en_table, radii)
 
 
 if __name__ == "__main__":

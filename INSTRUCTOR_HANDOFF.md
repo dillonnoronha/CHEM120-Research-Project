@@ -56,6 +56,12 @@ automatically within a minute whenever the GitHub repository is updated.
    (on github.com: open the file → pencil/upload → commit). The live app
    updates itself.
 
+**Many separate student files instead of one export?** Unlock Instructor mode
+(Section 6) and use the **🗂️ Combine** tab: drop in all the files students
+downloaded from the app (CSV or Excel, any mix), and it merges them, removes
+exact duplicates, re-cleans everything, and hands back one master
+`Combined_Data.xlsx` — then do step 4 above with that file.
+
 ## 5. Running it on your own computer (optional)
 
 With Python installed (python.org, 3.11 or newer), from the project folder:
@@ -70,6 +76,8 @@ or double-click `run_app_windows.bat`. The app opens at http://localhost:8501.
 The app never displays student emails, names, or group members — anywhere.
 That data stays in the spreadsheet and in the full Export downloads.
 To see it inside the app: sidebar → **🔑 Instructor mode** → passcode → Unlock.
+Unlocking also reveals the **🗂️ Combine** tab for merging student files
+(Section 4).
 The passcode is the `INSTRUCTOR_PASSCODE` line near the top of `pipeline.py`
 (change it there; anyone with the repo can read it, so treat it as a
 convenience latch, not security). Before making the repository public, read
