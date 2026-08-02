@@ -1081,6 +1081,17 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
         with p[3]:
             st.metric("Precision (pure)", f"{purity_result['precision']:.0%}")
         st.caption("Predicts purity from composition only — the phase label is never an input.")
+        if purity_result.get("cv_mean") is not None:
+            st.caption(f"🎯 {purity_result['cv_folds']}-fold cross-validated accuracy: "
+                       f"**{purity_result['cv_mean']:.0%} ± {purity_result['cv_std']:.02f}**")
+
+        purity_importance = purity_result["importance"]
+        if not purity_importance.empty:
+            st.markdown("**Top features used** — hover a bar for the exact weight")
+            st.plotly_chart(
+                plot_bar_chart(purity_importance, "Feature", "Importance", "", "Importance"),
+                use_container_width=True, config=PLOTLY_CONFIG,
+            )
 
     # --- Predict a proposed compound (A, A', B, B', B'' all supported) ---
     st.markdown("#### Test a proposed compound")
