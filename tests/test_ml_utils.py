@@ -8,7 +8,6 @@ Tests cover:
 4. Model training & prediction (train_ml_model, make_single_prediction_row)
 """
 
-import io
 import numpy as np
 import pandas as pd
 import pytest
@@ -31,7 +30,6 @@ from pipeline import (
     build_feature_matrix,
     train_ml_model,
     make_single_prediction_row,
-    load_atomic_table_from_bytes,
 )
 
 

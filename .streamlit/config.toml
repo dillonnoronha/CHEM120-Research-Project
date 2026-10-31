@@ -11,5 +11,10 @@ secondaryBackgroundColor = "#ffffff"
 textColor = "#1a2233"
 font = "sans serif"
 
+[server]
+# Class spreadsheets are well under 1 MB; a small cap keeps a stray huge upload
+# from exhausting the app's memory.
+maxUploadSize = 25
+
 [browser]
 gatherUsageStats = false

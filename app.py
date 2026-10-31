@@ -36,7 +36,9 @@ Run locally:
 from __future__ import annotations
 
 import hmac
+import html
 import re
+import time
 
 import pandas as pd
 import streamlit as st
@@ -67,7 +69,7 @@ from pipeline import (
     load_en_table_from_bytes,
     load_radii_table_from_bytes,
     make_demo_dataset,
-    make_single_prediction_row,
+    make_prediction_rows,
     mixing_summary,
     nearest_neighbors,
     normalize_bubble_label,
@@ -88,9 +90,9 @@ from pipeline import (
     remove_invalid_element_rows,
     set_chart_theme,
     summarize_by_element,
-    valid_element_symbols,
     train_ml_model,
     train_purity_model,
+    valid_element_symbols,
     validate_compound_rows,
 )
 
@@ -121,19 +123,23 @@ _ST_THEME_OPTIONS = {
 
 
 def sync_streamlit_theme(mode: str) -> None:
-    """Swap Streamlit's native theme at runtime, rerunning once so it takes effect."""
+    """
+    Swap Streamlit's native theme at runtime, rerunning once so it takes effect.
 
-    st.session_state.setdefault("_applied_theme", "light")   # matches config.toml
-    if st.session_state["_applied_theme"] == mode:
-        return
+    Streamlit's theme options are process-wide, so another visitor's toggle can
+    change them under this session. Comparing against the live option (not a
+    per-session flag) lets every session put its own theme back on its next run.
+    """
+
     try:
-        from streamlit import config as _st_config
+        from streamlit import config as st_config
+        if st_config.get_option("theme.base") == mode:
+            return
         for key, value in _ST_THEME_OPTIONS[mode].items():
-            _st_config.set_option(key, value)
+            st_config.set_option(key, value)
     except Exception:
         # Internal API unavailable: CSS + chart themes still switch below.
-        pass
-    st.session_state["_applied_theme"] = mode
+        return
     st.rerun()
 
 
@@ -521,9 +527,11 @@ button[data-testid="stBaseButton-pillsActive"], button[kind="pillsActive"] {
 # =============================================================================
 
 def formula_html(formula: str) -> str:
-    """Render a formula string like La2NiO4 with real subscripts."""
+    """Render a formula string like La2NiO4 with real subscripts (HTML-escaped)."""
 
-    safe = str(formula or "").replace("<", "").replace(">", "")
+    # quote=False: a text node only needs & < > escaped, and entities like &#x27;
+    # would otherwise contain digits that the subscript regex below rewrites.
+    safe = html.escape(str(formula or ""), quote=False)
     return '<span class="formula">' + re.sub(r"(\d+(?:\.\d+)?)", r"<sub>\1</sub>", safe) + "</span>"
 
 
@@ -537,6 +545,42 @@ def instructor_passcode() -> str:
     return str(value or INSTRUCTOR_PASSCODE)
 
 
+# Wrong passcodes in one session before unlocking pauses (slows guessing).
+MAX_PASSCODE_ATTEMPTS = 5
+PASSCODE_LOCKOUT_SECONDS = 60
+
+
+def try_instructor_unlock(passcode: str) -> None:
+    """Check the passcode (constant-time) with a per-session lockout after repeated misses."""
+
+    now = time.monotonic()
+    locked_until = st.session_state.get("passcode_locked_until", 0.0)
+    if now < locked_until:
+        st.error(f"Too many wrong attempts. Try again in {int(locked_until - now) + 1} s.")
+        return
+
+    expected = instructor_passcode()
+    if not expected:
+        st.error("Instructor mode is not configured. Set INSTRUCTOR_PASSCODE "
+                 "in .streamlit/secrets.toml or the environment.")
+        return
+
+    if hmac.compare_digest(passcode.encode(), expected.encode()):
+        st.session_state.passcode_failures = 0
+        st.session_state.instructor_mode = True
+        st.session_state.pop("instructor_pass", None)   # don't keep the passcode in session state
+        st.rerun()
+
+    failures = st.session_state.get("passcode_failures", 0) + 1
+    st.session_state.passcode_failures = failures
+    if failures >= MAX_PASSCODE_ATTEMPTS:
+        st.session_state.passcode_failures = 0
+        st.session_state.passcode_locked_until = now + PASSCODE_LOCKOUT_SECONDS
+        st.error(f"Too many wrong attempts. Try again in {PASSCODE_LOCKOUT_SECONDS} s.")
+    else:
+        st.error("Wrong passcode.")
+
+
 def instructor_mode_on() -> bool:
     """True when the instructor passcode has been entered this session."""
 
@@ -547,6 +591,48 @@ def visible(df: pd.DataFrame) -> pd.DataFrame:
     """Contact/group columns stay hidden for students, shown in instructor mode."""
 
     return df if instructor_mode_on() else public_view(df)
+
+
+def student_issues(issues_df: pd.DataFrame) -> pd.DataFrame:
+    """Validation issues minus the email-match checks (those name a student's email)."""
+
+    if issues_df.empty or "Field" not in issues_df.columns:
+        return issues_df
+    return issues_df[issues_df["Field"] != "Email"].reset_index(drop=True)
+
+
+def count_semesters(df: pd.DataFrame) -> int:
+    """Number of distinct, non-blank semesters in the data."""
+
+    if "Semester" not in df.columns:
+        return 0
+    semesters = df["Semester"].dropna().astype(str).str.strip()
+    return int(semesters[semesters != ""].nunique())
+
+
+def with_plot_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df with short Bubble/Phase display labels built from the raw answers."""
+
+    out = df.copy()
+    phase_src = "P_raw" if "P_raw" in out.columns else "P"
+    bub_src = "Bub_raw" if "Bub_raw" in out.columns else "Bub"
+    out["PhasePlotLabel"] = out[phase_src].map(lambda v: display_label(normalize_phase_label(v)))
+    out["BubblePlotLabel"] = out[bub_src].map(lambda v: display_label(normalize_bubble_label(v)))
+    return out
+
+
+BUBBLE_ORDER = ["Yes", "No", "Maybe", "Other / needs review", "Missing"]
+PHASE_ORDER = ["Pure", "Impure", "Not made", "Other / needs review", "Missing"]
+
+
+def element_select(label: str, key: str, symbols: list[str], default: str = "",
+                   optional: bool = True) -> str:
+    """Element dropdown; optional ones start with a '— none —' choice."""
+
+    options = [""] + symbols if optional else symbols
+    index = options.index(default) if default in options else 0
+    return st.selectbox(label, options, index=index, key=key,
+                        format_func=lambda s: s if s else "— none —")
 
 
 def kpi_card(icon: str, value: str, label: str, tone: str = "", delay: float = 0.0) -> str:
@@ -716,11 +802,8 @@ def render_check_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame,
 
     # Privacy: email-match checks run in the background and are included in the
     # downloadable validation report, but are only shown in instructor mode.
-    if not instructor_mode_on() and not issues_df.empty and "Field" in issues_df.columns:
-        shown_issues = issues_df[issues_df["Field"] != "Email"].reset_index(drop=True)
-        n_hidden = len(issues_df) - len(shown_issues)
-    else:
-        shown_issues, n_hidden = issues_df, 0
+    shown_issues = issues_df if instructor_mode_on() else student_issues(issues_df)
+    n_hidden = len(issues_df) - len(shown_issues)
 
     check_cols = st.columns(2)
     with check_cols[0]:
@@ -778,8 +861,12 @@ def render_explore_tab(described_df: pd.DataFrame) -> None:
 
     st.caption("Descriptive tables only — patterns to discuss, not proof of cause.")
 
-    semesters = sorted([x for x in described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
-    instructors = sorted([x for x in described_df.get("Instructor", pd.Series(dtype=str)).dropna().astype(str).unique() if x.strip()])
+    def distinct(column: str) -> list[str]:
+        values = described_df.get(column, pd.Series(dtype=str)).dropna().astype(str)
+        return sorted(v for v in values.unique() if v.strip())
+
+    semesters = distinct("Semester")
+    instructors = distinct("Instructor")
 
     filter_cols = st.columns([2.4, 2.4, 1.6])
     with filter_cols[0]:
@@ -791,7 +878,7 @@ def render_explore_tab(described_df: pd.DataFrame) -> None:
         hide_rare = st.checkbox("Hide elements with < 3 compounds", value=True)
         min_rows = 3 if hide_rare else 1
 
-    filtered = described_df.copy()
+    filtered = described_df
     if selected_semesters:
         filtered = filtered[filtered["Semester"].astype(str).isin(selected_semesters)]
     if selected_instructors:
@@ -803,26 +890,20 @@ def render_explore_tab(described_df: pd.DataFrame) -> None:
 
     st.caption(f"Showing **{len(filtered):,}** of {len(described_df):,} compounds.")
 
-    plot_df = filtered.copy()
-    phase_src = "P_raw" if "P_raw" in plot_df.columns else "P"
-    bub_src = "Bub_raw" if "Bub_raw" in plot_df.columns else "Bub"
-    plot_df["PhasePlotLabel"] = plot_df[phase_src].apply(lambda v: display_label(normalize_phase_label(v)))
-    plot_df["BubblePlotLabel"] = plot_df[bub_src].apply(lambda v: display_label(normalize_bubble_label(v)))
+    plot_df = with_plot_labels(filtered)
 
     st.markdown("#### Response counts")
     count_cols = st.columns(2)
     with count_cols[0]:
         st.markdown("**Bubble response**")
         st.dataframe(
-            label_count_table(plot_df, "BubblePlotLabel", kind="bubble",
-                              preferred_order=["Yes", "No", "Maybe", "Other / needs review", "Missing"]),
+            label_count_table(plot_df, "BubblePlotLabel", kind="bubble", preferred_order=BUBBLE_ORDER),
             use_container_width=True, hide_index=True,
         )
     with count_cols[1]:
         st.markdown("**Phase result**")
         st.dataframe(
-            label_count_table(plot_df, "PhasePlotLabel", kind="phase",
-                              preferred_order=["Pure", "Impure", "Not made", "Other / needs review", "Missing"]),
+            label_count_table(plot_df, "PhasePlotLabel", kind="phase", preferred_order=PHASE_ORDER),
             use_container_width=True, hide_index=True,
         )
 
@@ -1110,34 +1191,27 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
                "(plus a third B″ under advanced). Leave A′/B′ as **— none —** for a simple compound.")
 
     symbols = valid_element_symbols(atomic)
-    optional_symbols = [""] + symbols
-
-    def element_select(label: str, key: str, default: str = "", optional: bool = True):
-        options = optional_symbols if optional else symbols
-        index = options.index(default) if default in options else 0
-        return st.selectbox(label, options, index=index, key=key,
-                            format_func=lambda s: s if s else "— none —")
 
     with st.container(border=True):
         st.markdown("**A-site**")
         a1, a2, a3, a4 = st.columns(4)
         with a1:
-            pred_a = element_select("A element", "pred_a", default="La", optional=False)
+            pred_a = element_select("A element", "pred_a", symbols, default="La", optional=False)
         with a2:
             pred_an = st.number_input("A moles", value=2.0, min_value=0.0, step=0.5, key="pred_an")
         with a3:
-            pred_ap = element_select("A′ element", "pred_ap")
+            pred_ap = element_select("A′ element", "pred_ap", symbols)
         with a4:
             pred_apn = st.number_input("A′ moles", value=0.0, min_value=0.0, step=0.5, key="pred_apn")
 
         st.markdown("**B-site**")
         b1, b2, b3, b4 = st.columns(4)
         with b1:
-            pred_b = element_select("B element", "pred_b", default="Ni", optional=False)
+            pred_b = element_select("B element", "pred_b", symbols, default="Ni", optional=False)
         with b2:
             pred_bn = st.number_input("B moles", value=1.0, min_value=0.0, step=0.5, key="pred_bn")
         with b3:
-            pred_bp = element_select("B′ element", "pred_bp")
+            pred_bp = element_select("B′ element", "pred_bp", symbols)
         with b4:
             pred_bpn = st.number_input("B′ moles", value=0.0, min_value=0.0, step=0.5, key="pred_bpn")
 
@@ -1150,31 +1224,35 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
         with st.expander("Third B-site element (B″, advanced)"):
             adv1, adv2 = st.columns(2)
             with adv1:
-                pred_bdp = element_select("B″ element", "pred_bdp")
+                pred_bdp = element_select("B″ element", "pred_bdp", symbols)
             with adv2:
                 pred_bdpn = st.number_input("B″ moles", value=0.0, min_value=0.0, step=0.5, key="pred_bdpn")
 
         predict_clicked = st.button("🔮 Predict bubble & purity", type="primary")
 
-    if predict_clicked:
-        pred_row = make_single_prediction_row(
-            atomic, en_table, pred_phase, pred_a, pred_an, pred_ap, pred_apn,
-            pred_b, pred_bn, pred_bp, pred_bpn, pred_bdp, pred_bdpn, pred_on, radii,
-        )
-        formula = pred_row.iloc[0]["Formula"]
+    def predict(rows: pd.DataFrame, result: dict, use_phase: bool) -> list[float]:
+        """Probability of the positive class (bubbles / pure) for each row."""
 
-        bubble_features = build_feature_matrix(
-            pred_row, use_phase=use_phase_in_ml, expected_columns=ml_result["feature_columns"])
-        bubble_prob = ml_result["model"].predict_proba(bubble_features)[0][1]
+        features = build_feature_matrix(rows, use_phase=use_phase,
+                                        expected_columns=result["feature_columns"],
+                                        fill_values=result.get("fill_values"))
+        return [float(p) for p in result["model"].predict_proba(features)[:, 1]]
+
+    compound = {"phase": pred_phase, "a": pred_a, "an": pred_an, "ap": pred_ap, "apn": pred_apn,
+                "b": pred_b, "bn": pred_bn, "bp": pred_bp, "bpn": pred_bpn,
+                "bdp": pred_bdp, "bdpn": pred_bdpn, "on": pred_on}
+
+    if predict_clicked:
+        pred_row = make_prediction_rows(atomic, en_table, [compound], radii)
+        formula = pred_row.iloc[0]["Formula"]
+        bubble_prob = predict(pred_row, ml_result, use_phase_in_ml)[0]
 
         out_cols = st.columns(2)
         with out_cols[0]:
             st.markdown(prob_card(formula, bubble_prob, "bubble"), unsafe_allow_html=True)
         with out_cols[1]:
             if purity_result.get("ok"):
-                purity_features = build_feature_matrix(
-                    pred_row, use_phase=False, expected_columns=purity_result["feature_columns"])
-                pure_prob = purity_result["model"].predict_proba(purity_features)[0][1]
+                pure_prob = predict(pred_row, purity_result, use_phase=False)[0]
                 st.markdown(prob_card(formula, pure_prob, "purity"), unsafe_allow_html=True)
             else:
                 st.info("Purity model not available yet.")
@@ -1226,31 +1304,17 @@ def render_ml_tab(described_df: pd.DataFrame, atomic: pd.DataFrame, en_table: pd
 
         if run_sweep:
             which, lo, hi = sweep_options[sweep_label]
-            base = {"a": pred_a, "an": pred_an, "ap": pred_ap, "apn": pred_apn,
-                    "b": pred_b, "bn": pred_bn, "bp": pred_bp, "bpn": pred_bpn,
-                    "bdp": pred_bdp, "bdpn": pred_bdpn, "on": pred_on}
-            points = []
+            values = [lo + (hi - lo) * i / 24 for i in range(25)]
             with st.spinner("Sweeping…"):
-                for value in [lo + (hi - lo) * i / 24 for i in range(25)]:
-                    inputs = dict(base)
-                    inputs[which] = value
-                    row = make_single_prediction_row(
-                        atomic, en_table, pred_phase,
-                        inputs["a"], inputs["an"], inputs["ap"], inputs["apn"],
-                        inputs["b"], inputs["bn"], inputs["bp"], inputs["bpn"],
-                        inputs["bdp"], inputs["bdpn"], inputs["on"], radii,
-                    )
-                    feats = build_feature_matrix(
-                        row, use_phase=use_phase_in_ml, expected_columns=ml_result["feature_columns"])
-                    point = {"value": value,
-                             "bubble_prob": float(ml_result["model"].predict_proba(feats)[0][1])}
-                    if purity_result.get("ok"):
-                        p_feats = build_feature_matrix(
-                            row, use_phase=False, expected_columns=purity_result["feature_columns"])
-                        point["purity_prob"] = float(purity_result["model"].predict_proba(p_feats)[0][1])
-                    points.append(point)
+                # All 25 points go through the pipeline and the models in one batch.
+                rows = make_prediction_rows(atomic, en_table,
+                                            [{**compound, which: v} for v in values], radii)
+                sweep = pd.DataFrame({"value": values,
+                                      "bubble_prob": predict(rows, ml_result, use_phase_in_ml)})
+                if purity_result.get("ok"):
+                    sweep["purity_prob"] = predict(rows, purity_result, use_phase=False)
             st.session_state["whatif_result"] = {
-                "sweep": pd.DataFrame(points), "label": sweep_label, "current": float(base[which]),
+                "sweep": sweep, "label": sweep_label, "current": float(compound[which]),
             }
 
         if st.session_state.get("whatif_result"):
@@ -1267,13 +1331,6 @@ def render_add_compound_tab(atomic: pd.DataFrame, en_table: pd.DataFrame, radii:
     st.caption("Enter one compound part by part. The app rebuilds the formula and checks it.")
 
     symbols = valid_element_symbols(atomic)
-    optional_symbols = [""] + symbols
-
-    def element_select(label: str, key: str, default: str = "", optional: bool = True):
-        options = optional_symbols if optional else symbols
-        index = options.index(default) if default in options else 0
-        return st.selectbox(label, options, index=index, key=key,
-                            format_func=lambda s: s if s else "— none —")
 
     with st.form("add_compound_form"):
         m1, m2, m3 = st.columns(3)
@@ -1289,17 +1346,17 @@ def render_add_compound_tab(atomic: pd.DataFrame, en_table: pd.DataFrame, radii:
         st.markdown("#### Formula parts")
         a_col, b_col, o_col = st.columns(3)
         with a_col:
-            new_a = element_select("A-site element", "add_a", default="La", optional=False)
+            new_a = element_select("A-site element", "add_a", symbols, default="La", optional=False)
             new_an = st.number_input("A-site ratio", value=2.0, min_value=0.0, step=0.5, key="add_an")
-            new_ap = element_select("A′-site element", "add_ap")
+            new_ap = element_select("A′-site element", "add_ap", symbols)
             new_apn = st.number_input("A′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_apn")
         with b_col:
-            new_b = element_select("B-site element", "add_b", default="Ni", optional=False)
+            new_b = element_select("B-site element", "add_b", symbols, default="Ni", optional=False)
             new_bn = st.number_input("B-site ratio", value=1.0, min_value=0.0, step=0.5, key="add_bn")
-            new_bp = element_select("B′-site element", "add_bp")
+            new_bp = element_select("B′-site element", "add_bp", symbols)
             new_bpn = st.number_input("B′ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bpn")
         with o_col:
-            new_bdp = element_select("B″-site element", "add_bdp")
+            new_bdp = element_select("B″-site element", "add_bdp", symbols)
             new_bdpn = st.number_input("B″ ratio", value=0.0, min_value=0.0, step=0.5, key="add_bdpn")
             new_on = st.number_input("Oxygen ratio", value=4.0, min_value=0.0, step=0.5, key="add_on")
 
@@ -1374,21 +1431,16 @@ def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outli
                "correlations, cation mixing, element summaries, and both models with "
                "cross-validation. Open it in a browser and print to PDF if needed.")
 
-    plot_df = described_df.copy()
-    phase_src = "P_raw" if "P_raw" in plot_df.columns else "P"
-    bub_src = "Bub_raw" if "Bub_raw" in plot_df.columns else "Bub"
-    plot_df["BubblePlotLabel"] = plot_df[bub_src].apply(lambda v: display_label(normalize_bubble_label(v)))
-    plot_df["PhasePlotLabel"] = plot_df[phase_src].apply(lambda v: display_label(normalize_phase_label(v)))
+    plot_df = with_plot_labels(described_df)
 
     corr = numeric_correlation_table(described_df)
     ml = train_ml_model(described_df, use_phase=use_phase_in_ml, use_mass=use_mass_in_ml)
     purity = train_purity_model(described_df, use_mass=use_mass_in_ml)
 
-    n_semesters = described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()
     stats = {
         "generated": pd.Timestamp.now().strftime("%B %d, %Y at %H:%M"),
         "n_compounds": len(described_df),
-        "n_semesters": int(n_semesters),
+        "n_semesters": count_semesters(described_df),
         "bubble_rate": f"{described_df['BubbleYes'].mean():.0%}" if "BubbleYes" in described_df.columns and len(described_df) else "—",
         "pure_rate": f"{(described_df['PhaseN'] == 2).mean():.0%}" if "PhaseN" in described_df.columns and len(described_df) else "—",
         "n_issues": int(len(issues_df)),
@@ -1396,10 +1448,8 @@ def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outli
     }
     report_bytes = build_html_report(
         stats,
-        label_count_table(plot_df, "BubblePlotLabel", kind="bubble",
-                          preferred_order=["Yes", "No", "Maybe", "Other / needs review", "Missing"]),
-        label_count_table(plot_df, "PhasePlotLabel", kind="phase",
-                          preferred_order=["Pure", "Impure", "Not made", "Other / needs review", "Missing"]),
+        label_count_table(plot_df, "BubblePlotLabel", kind="bubble", preferred_order=BUBBLE_ORDER),
+        label_count_table(plot_df, "PhasePlotLabel", kind="phase", preferred_order=PHASE_ORDER),
         bubble_relationships(corr) if not corr.empty else None,
         mixing_summary(described_df),
         summarize_by_element(described_df, "A", min_rows=3).round(1),
@@ -1413,30 +1463,41 @@ def render_export_tab(described_df: pd.DataFrame, issues_df: pd.DataFrame, outli
 
     st.divider()
 
+    # Privacy: the full files carry every student's email, name, and group
+    # members, so only instructor mode can download them. Students get the
+    # same data with those columns removed.
+    instructor = instructor_mode_on()
+    data_out = described_df if instructor else public_view(described_df)
+    data_out = data_out[ordered_columns(data_out)]
+    issues_out = issues_df if instructor else student_issues(issues_df)
+
     export_cols = st.columns(2)
     with export_cols[0]:
         st.markdown("#### Cleaned data")
-        st.download_button("Cleaned data (CSV)",
-                           dataframe_to_csv_bytes(described_df[ordered_columns(described_df)]),
+        st.download_button("Cleaned data (CSV)", dataframe_to_csv_bytes(data_out),
                            file_name="general_chemistry_ii_cleaned_compound_data.csv", mime="text/csv")
-        st.download_button("Cleaned data (Excel)",
-                           dataframe_to_excel_bytes(described_df[ordered_columns(described_df)], "Cleaned_Data"),
+        st.download_button("Cleaned data (Excel)", dataframe_to_excel_bytes(data_out, "Cleaned_Data"),
                            file_name="general_chemistry_ii_cleaned_compound_data.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        no_contact = public_view(described_df)
-        st.download_button("Cleaned data — no contact info (CSV)",
-                           dataframe_to_csv_bytes(no_contact[ordered_columns(no_contact)]),
-                           file_name="general_chemistry_ii_cleaned_public.csv", mime="text/csv",
-                           help="Same data with emails, names, and member lists removed — safe to share.")
+        if instructor:
+            no_contact = public_view(described_df)
+            st.download_button("Cleaned data — no contact info (CSV)",
+                               dataframe_to_csv_bytes(no_contact[ordered_columns(no_contact)]),
+                               file_name="general_chemistry_ii_cleaned_public.csv", mime="text/csv",
+                               help="Same data with emails, names, and member lists removed — safe to share.")
     with export_cols[1]:
         st.markdown("#### Reports")
-        st.download_button("Validation report (CSV)", dataframe_to_csv_bytes(issues_df),
+        st.download_button("Validation report (CSV)", dataframe_to_csv_bytes(issues_out),
                            file_name="general_chemistry_ii_validation_report.csv", mime="text/csv")
         st.download_button("Outlier report (CSV)", dataframe_to_csv_bytes(outlier_df),
                            file_name="general_chemistry_ii_outlier_report.csv", mime="text/csv")
 
-    st.caption("🔒 The full downloads keep contact/group info for instructor records — the app itself "
-               "never displays it. Use the no-contact-info file for anything student-facing.")
+    if instructor:
+        st.caption("🔓 Instructor mode — these downloads include contact and group-member info. "
+                   "Use the no-contact-info file for anything student-facing.")
+    else:
+        st.caption("🔒 Downloads leave out emails, names, and member lists. Instructors can unlock "
+                   "the full files with the 🔑 Instructor mode passcode in the sidebar.")
 
 
 def render_new_semester_tab(long_df: pd.DataFrame) -> None:
@@ -1483,8 +1544,11 @@ def render_new_semester_tab(long_df: pd.DataFrame) -> None:
     preview_cols = [c for c in ["GroupNumber", "Semester", "Slot", "A", "AN", "B", "BN", "O", "ON", "P", "Bub"] if c in new_long.columns]
     st.dataframe(new_long[preview_cols].head(10), use_container_width=True)
 
-    existing_semesters = set(long_df["Semester"].dropna().astype(str).unique())
-    new_semesters = set(new_long["Semester"].dropna().astype(str).unique())
+    def semesters_in(df: pd.DataFrame) -> set:
+        return set(df["Semester"].dropna().astype(str).unique()) if "Semester" in df.columns else set()
+
+    existing_semesters = semesters_in(long_df)
+    new_semesters = semesters_in(new_long)
     overlap = existing_semesters & new_semesters
     if overlap:
         st.warning(f"New file contains semester(s) already present: **{', '.join(sorted(overlap))}**. "
@@ -1509,6 +1573,10 @@ def render_new_semester_tab(long_df: pd.DataFrame) -> None:
     new_to_merge = new_long.drop(index=duplicates.index) if (exclude_dups and not duplicates.empty) else new_long
     merged = pd.concat([long_df, new_to_merge], ignore_index=True)
     st.markdown(f"#### Merged dataset — {len(merged):,} total rows")
+    if not instructor_mode_on():
+        # The merged master file holds every student's contact info.
+        st.info("🔒 Unlock 🔑 Instructor mode in the sidebar to download the merged master file.")
+        return
     st.download_button("⬇️ Download merged Combined_Data.xlsx",
                        dataframe_to_excel_bytes(merged, "Combined_Data"),
                        file_name="Combined_Data_merged.xlsx",
@@ -1675,8 +1743,6 @@ def main() -> None:
         "Class spreadsheet", type=["csv", "xlsx", "xlsm", "xls"],
         help="Upload Combined_Data.xlsx or another General Chemistry II survey/database file.",
     )
-    uploaded_atomic = None
-    uploaded_en = None
 
     default_path = find_default_database()
     use_sample_data = st.sidebar.checkbox(
@@ -1713,24 +1779,12 @@ def main() -> None:
         else:
             passcode = st.text_input("Passcode", type="password", key="instructor_pass")
             if st.button("Unlock", key="instructor_unlock"):
-                expected = instructor_passcode()
-                if not expected:
-                    st.error("Instructor mode is not configured. Set INSTRUCTOR_PASSCODE "
-                             "in .streamlit/secrets.toml or the environment.")
-                elif hmac.compare_digest(passcode.encode(), expected.encode()):
-                    st.session_state.instructor_mode = True
-                    st.rerun()
-                else:
-                    st.error("Wrong passcode.")
+                try_instructor_unlock(passcode)
 
     # ----- Reference tables (atomic mass, electronegativity, ionic radii) -----
     try:
-        atomic = load_atomic_table_from_bytes(
-            uploaded_atomic.getvalue() if uploaded_atomic else None,
-            uploaded_atomic.name if uploaded_atomic else "")
-        en_table = load_en_table_from_bytes(
-            uploaded_en.getvalue() if uploaded_en else None,
-            uploaded_en.name if uploaded_en else "")
+        atomic = load_atomic_table_from_bytes(None)
+        en_table = load_en_table_from_bytes(None)
         radii = load_radii_table_from_bytes(None)
     except Exception as exc:
         st.error(f"Reference table error: {exc}")
@@ -1777,12 +1831,10 @@ def main() -> None:
     outlier_df = detect_numeric_outliers(described_df, z_threshold=z_threshold)
 
     # ----- Hero with live dataset chips -----
-    n_semesters = described_df.get("Semester", pd.Series(dtype=str)).dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()
-    n_elements = pd.unique(
-        pd.concat([described_df.get(c, pd.Series(dtype=str)) for c in ["A", "AP", "B", "BP", "BDP"]])
-        .dropna().astype(str).str.strip()
-    )
-    n_elements = len([e for e in n_elements if e])
+    n_semesters = count_semesters(described_df)
+    element_cells = pd.concat([described_df.get(c, pd.Series(dtype=str)) for c in ["A", "AP", "B", "BP", "BDP"]])
+    element_cells = element_cells.dropna().astype(str).str.strip()
+    n_elements = int(element_cells[element_cells != ""].nunique())
     render_hero(chips=[
         f"⚗️ {len(described_df):,} compounds",
         f"📅 {n_semesters} semester{'s' if n_semesters != 1 else ''}",
@@ -1800,15 +1852,15 @@ def main() -> None:
     # ----- KPI row -----
     bubble_rate = described_df["BubbleYes"].mean() if "BubbleYes" in described_df.columns and len(described_df) else 0.0
     pure_rate = (described_df["PhaseN"] == 2).mean() if "PhaseN" in described_df.columns and len(described_df) else 0.0
-    student_issues = issues_df[issues_df["Field"] != "Email"] if ("Field" in issues_df.columns and not issues_df.empty) else issues_df
+    open_issues = student_issues(issues_df)
 
     kpis = st.columns(4)
     kpis[0].markdown(kpi_card("⚗️", f"{len(described_df):,}", "compounds loaded",
                               "kpi-ok" if len(described_df) else "kpi-bad", 0.0), unsafe_allow_html=True)
     kpis[1].markdown(kpi_card("🫧", f"{bubble_rate:.0%}", "bubbled (yes)", "", 0.06), unsafe_allow_html=True)
     kpis[2].markdown(kpi_card("💎", f"{pure_rate:.0%}", "came out pure", "", 0.12), unsafe_allow_html=True)
-    kpis[3].markdown(kpi_card("🩺", f"{len(student_issues):,}", "data issues to review",
-                              "kpi-ok" if len(student_issues) == 0 else "kpi-warn", 0.18), unsafe_allow_html=True)
+    kpis[3].markdown(kpi_card("🩺", f"{len(open_issues):,}", "data issues to review",
+                              "kpi-ok" if len(open_issues) == 0 else "kpi-warn", 0.18), unsafe_allow_html=True)
 
     # ----- Everything lives in tabs (no long scroll) -----
     tab_labels = ["✅ Check", "📊 Explore", "🌡️ Heatmap", "🧭 Structure",
@@ -1842,4 +1894,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# build: 2026-07-01 revamp

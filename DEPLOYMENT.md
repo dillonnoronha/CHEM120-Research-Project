@@ -44,8 +44,14 @@ GitHub repo can open the raw file. Before deploying publicly, either:
 
 1. **Use a private GitHub repo** (Streamlit Cloud can deploy from private repos), or
 2. **Ship a scrubbed dataset**: open the app locally, go to **Export → Cleaned
-   data — no contact info (CSV)**, save that file as the repo's dataset instead,
-   and keep the full spreadsheet offline.
+   data (CSV)** (without Instructor mode it already leaves out contact info; in
+   Instructor mode use **Cleaned data — no contact info (CSV)**), save that file
+   as the repo's dataset instead, and keep the full spreadsheet offline.
+
+Downloads that contain contact info (the full Export files and the New Semester
+merged master file) are only offered in Instructor mode. Every CSV/Excel
+download also neutralizes cells that start with `=`, `+`, `-`, or `@` so a
+student-typed formula can't run when the file is opened in Excel.
 
 Also set the Instructor mode passcode as a secret: in Streamlit Cloud, open
 **App settings → Secrets** and add `INSTRUCTOR_PASSCODE = "your-passcode"`.
@@ -79,6 +85,6 @@ The app loads data in this priority order:
 3. A small built-in demo dataset (only if neither of the above exists).
 
 `data/Combined_Data.xlsx` is now included, so the app loads the real class data on
-startup. To roll forward a new semester, use the **New Semester** tab to merge the
-new export, download the combined file, and replace `data/Combined_Data.xlsx` with
+startup. To roll forward a new semester, unlock Instructor mode, use the **New
+Semester** tab to merge the new export, download the combined file, and replace `data/Combined_Data.xlsx` with
 it (then push to GitHub if using Option A).

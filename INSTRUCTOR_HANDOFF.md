@@ -48,7 +48,8 @@ automatically within a minute whenever the GitHub repository is updated.
 
 ## 4. Each new semester (the one recurring task)
 
-1. Open the app → **📥 New Semester** tab.
+1. Open the app, unlock **🔑 Instructor mode** (Section 6), then open the
+   **📥 New Semester** tab.
 2. Upload the semester's raw Excel export. The app expands it, warns about
    duplicates, and shows a merge preview.
 3. Click **Download merged Combined_Data.xlsx**.
@@ -74,8 +75,10 @@ or double-click `run_app_windows.bat`. The app opens at http://localhost:8501.
 ## 6. Privacy & the instructor passcode
 
 The app never displays student emails, names, or group members — anywhere.
-That data stays in the spreadsheet and in the full Export downloads.
-To see it inside the app: sidebar → **🔑 Instructor mode** → passcode → Unlock.
+That data stays in the spreadsheet. Students' Export downloads leave it out;
+the full downloads (and the New Semester merged file) appear only in
+Instructor mode. To see it inside the app: sidebar → **🔑 Instructor mode** →
+passcode → Unlock. Five wrong passcodes in a row pause unlocking for a minute.
 Unlocking also reveals the **🗂️ Combine** tab for merging student files
 (Section 4).
 The passcode is read from `INSTRUCTOR_PASSCODE` in `.streamlit/secrets.toml`
