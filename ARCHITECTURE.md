@@ -108,4 +108,4 @@ This keeps the UI responsive when students click between tabs.
 - Add new descriptors in `add_chemical_descriptors()` (ionic radius, tolerance factor, electronegativity difference)
 - Add new validation rules in `validate_compound_rows()`
 - Adjust ML features in `feature_columns()` or change models in `train_ml_model()`
-- Update survey column aliases in `infer_slot_column()` if Google Form questions change
+- Update survey column aliases in `SLOT_FIELD_ALIASES` if Google Form questions change

@@ -25,7 +25,7 @@ The app is organized into clear sections:
 
 6. **Column mapping and reshaping**
    - `normalize_to_long_format()` converts the original wide spreadsheet into one compound per row.
-   - `infer_slot_column()` is where you add support for new survey column names.
+   - `SLOT_FIELD_ALIASES` (top of section 5) is where you add support for new survey column names; both the wide and long formats use it.
 
 7. **Cleaning and formula reconstruction**
    - `clean_and_encode_data()` standardizes element symbols, ratios, phase, and bubble labels.
@@ -86,11 +86,11 @@ If the department changes the Google Form wording, column names in the exported 
 **Step 1 — Get the new column names.**
 Download a fresh export from the form (or look at the header row of the uploaded file listed in the warning).
 
-**Step 2 — Open `infer_slot_column()` in `app.py`.**
-Find the `field_aliases` dictionary near the top of the function. Each key is an internal field name; its value is a list of accepted lowercase column-name fragments.
+**Step 2 — Open `SLOT_FIELD_ALIASES` in `pipeline.py`.**
+It sits just above `find_column()` and `infer_slot_column()`. Each key is an internal field name; its value is a list of accepted lowercase column-name fragments.
 
 ```python
-field_aliases = {
+SLOT_FIELD_ALIASES = {
     "A":   ["a", "asite", "asiteelement", "aelement"],
     "AN":  ["an", "aratio", "asiteratio", "aamount"],
     "B":   ["b", "bsite", "bsiteelement", "belement"],
@@ -113,13 +113,8 @@ Reload the app with the new export. The warning banner should disappear and comp
 
 ### Support a new survey column name
 
-Edit:
-
-```python
-infer_slot_column()
-```
-
-Add new aliases to `field_aliases`.
+Add new aliases to `SLOT_FIELD_ALIASES` in `pipeline.py` (metadata such as
+group number or semester lives in `METADATA_ALIASES` right below it).
 
 ### Change model features
 
