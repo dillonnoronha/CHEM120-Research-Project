@@ -47,8 +47,10 @@ GitHub repo can open the raw file. Before deploying publicly, either:
    data — no contact info (CSV)**, save that file as the repo's dataset instead,
    and keep the full spreadsheet offline.
 
-Also change `INSTRUCTOR_PASSCODE` in `pipeline.py` before sharing the app —
-the default value is not a secret.
+Also set the Instructor mode passcode as a secret: in Streamlit Cloud, open
+**App settings → Secrets** and add `INSTRUCTOR_PASSCODE = "your-passcode"`.
+Locally, put the same line in `.streamlit/secrets.toml` (git-ignored) or set
+the `INSTRUCTOR_PASSCODE` environment variable. Never commit it to the code.
 
 ## Option B — Run locally on one computer (no internet)
 

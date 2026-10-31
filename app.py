@@ -35,6 +35,7 @@ Run locally:
 
 from __future__ import annotations
 
+import hmac
 import re
 
 import pandas as pd
@@ -524,6 +525,16 @@ def formula_html(formula: str) -> str:
 
     safe = str(formula or "").replace("<", "").replace(">", "")
     return '<span class="formula">' + re.sub(r"(\d+(?:\.\d+)?)", r"<sub>\1</sub>", safe) + "</span>"
+
+
+def instructor_passcode() -> str:
+    """Instructor passcode from .streamlit/secrets.toml, else the environment."""
+
+    try:
+        value = st.secrets.get("INSTRUCTOR_PASSCODE", "")
+    except Exception:  # no secrets.toml present
+        value = ""
+    return str(value or INSTRUCTOR_PASSCODE)
 
 
 def instructor_mode_on() -> bool:
@@ -1702,7 +1713,11 @@ def main() -> None:
         else:
             passcode = st.text_input("Passcode", type="password", key="instructor_pass")
             if st.button("Unlock", key="instructor_unlock"):
-                if passcode == INSTRUCTOR_PASSCODE:
+                expected = instructor_passcode()
+                if not expected:
+                    st.error("Instructor mode is not configured. Set INSTRUCTOR_PASSCODE "
+                             "in .streamlit/secrets.toml or the environment.")
+                elif hmac.compare_digest(passcode.encode(), expected.encode()):
                     st.session_state.instructor_mode = True
                     st.rerun()
                 else:

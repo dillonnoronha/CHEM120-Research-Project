@@ -17,7 +17,7 @@ Students use it in the browser; nothing is installed on their machines.
 | File / folder | What it is |
 |---|---|
 | `app.py` | The user interface (this is the "main file path" for deployment) |
-| `pipeline.py` | All data cleaning, chemistry math, and ML. Settings live at the top — including `INSTRUCTOR_PASSCODE` |
+| `pipeline.py` | All data cleaning, chemistry math, and ML. Settings live at the top |
 | `data/Combined_Data.xlsx` | The class dataset the app loads on startup |
 | `data/AtomicMass.csv`, `PaulingEN.csv`, `ShannonRadii.csv` | Reference tables (atomic data, electronegativity, ionic radii) |
 | `.streamlit/config.toml` | Colors/theme (light by default; in-app toggle for dark) |
@@ -78,9 +78,9 @@ That data stays in the spreadsheet and in the full Export downloads.
 To see it inside the app: sidebar → **🔑 Instructor mode** → passcode → Unlock.
 Unlocking also reveals the **🗂️ Combine** tab for merging student files
 (Section 4).
-The passcode is the `INSTRUCTOR_PASSCODE` line near the top of `pipeline.py`
-(change it there; anyone with the repo can read it, so treat it as a
-convenience latch, not security). Before making the repository public, read
+The passcode is read from `INSTRUCTOR_PASSCODE` in `.streamlit/secrets.toml`
+(git-ignored; on Streamlit Cloud, App settings → Secrets) or from the
+`INSTRUCTOR_PASSCODE` environment variable. It is never stored in the code. Before making the repository public, read
 the **Privacy before deploying** section of DEPLOYMENT.md.
 
 ## 7. If something breaks

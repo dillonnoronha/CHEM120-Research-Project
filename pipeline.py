@@ -31,6 +31,7 @@ from __future__ import annotations
 import difflib
 import io
 import math
+import os
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -156,8 +157,10 @@ OUTCOME_COLORS = {
 }
 
 # Passcode for Instructor mode (reveals the hidden contact columns inside the
-# app). CHANGE THIS before sharing the app beyond the teaching team.
-INSTRUCTOR_PASSCODE = "***REMOVED***"
+# app). Never hard-code it here: set the INSTRUCTOR_PASSCODE environment
+# variable, or add `INSTRUCTOR_PASSCODE = "..."` to .streamlit/secrets.toml
+# (git-ignored). If neither is set, Instructor mode stays locked.
+INSTRUCTOR_PASSCODE = os.environ.get("INSTRUCTOR_PASSCODE", "")
 
 # Shannon radius of O2- in six-fold coordination (Å), used by the Goldschmidt
 # tolerance factor.
